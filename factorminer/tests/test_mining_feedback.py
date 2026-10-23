@@ -283,6 +283,25 @@ def test_parse_reflection_accepts_json_and_rejects_noise() -> None:
     assert parse_reflection("1. alpha: Neg($close)") is None
 
 
+def test_loop_passes_configured_reflection_budget(tmp_path, monkeypatch) -> None:
+    received = []
+
+    def reflect(provider, evidence, **kwargs):
+        received.append(kwargs["max_tokens"])
+        return {"observations": ["All candidates were weak."]}
+
+    monkeypatch.setattr("factorminer.agent.reflection.reflect_on_batch", reflect)
+    cfg = load_config(overrides={"memory": {"llm_reflection": True, "reflection_max_tokens": 8192}})
+    cfg.output_dir = str(tmp_path)
+    rng = np.random.default_rng(0)
+    loop = RalphLoop(cfg, rng.normal(size=(5, 20, 8)), rng.normal(size=(5, 20)))
+    loop.iteration = 1
+    loop.memory.state.last_batch_feedback = {"iteration": 1, "outcomes": {"low_ic": 1}}
+    loop._reflect_on_batch()
+    assert received == [8192]
+    assert loop.memory.state.last_batch_feedback["reflection"]["observations"]
+
+
 # ---------------------------------------------------------------------------
 # Config defaults that follow the paper protocol
 # ---------------------------------------------------------------------------

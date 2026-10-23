@@ -27,6 +27,7 @@ import hashlib
 import logging
 import os
 import re
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -527,6 +528,8 @@ class OpenAICompatibleProvider(LLMProvider):
         prompt_cache: bool = False,
         extra_body: dict[str, Any] | None = None,
         context_window: int | None = None,
+        stream: bool = False,
+        stream_retries: int = 0,
     ) -> None:
         # SECURITY (SSRF): base_url is trusted local config only. Do not accept
         # URLs from prompts, remote manifests, or untrusted tool input.
@@ -545,6 +548,8 @@ class OpenAICompatibleProvider(LLMProvider):
         # Server context length. When set, max_tokens is lowered per call so
         # prompt + max_tokens never exceeds it (servers reject such requests).
         self.context_window = int(context_window) if context_window else None
+        self.stream = bool(stream)
+        self.stream_retries = max(int(stream_retries), 0)
         self._client: Any = None
 
     def _get_client(self) -> Any:
@@ -605,6 +610,79 @@ class OpenAICompatibleProvider(LLMProvider):
         )
         return fitted
 
+    def _consume_stream(self, response: Any, started: float) -> tuple[str, str, str, dict[str, Any]]:
+        """Collect SSE deltas, including reasoning and the final usage-only chunk.
+
+        The server can send reasoning immediately instead of buffering the
+        whole answer behind an HTTP proxy. An incomplete stream is never
+        returned as a candidate batch.
+        """
+        content: list[str] = []
+        reasoning: list[str] = []
+        info: dict[str, Any] = {"model": self.model, "stream": True}
+        finish = None
+        count = 0
+        progress_at = started
+        try:
+            for chunk in response:
+                count += 1
+                now = time.monotonic()
+                if count == 1:
+                    info["first_chunk_seconds"] = round(now - started, 3)
+                    logger.info("LLM stream connected after %.1fs", now - started)
+                if getattr(chunk, "model", None):
+                    info["model"] = chunk.model
+                if getattr(chunk, "usage", None) is not None:
+                    info.update(_openai_call_info(self.model, chunk))
+                for choice in getattr(chunk, "choices", ()) or ():
+                    if getattr(choice, "index", 0) != 0:
+                        continue
+                    delta = getattr(choice, "delta", None)
+                    if getattr(delta, "content", None):
+                        content.append(str(delta.content))
+                    thought = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                    if thought:
+                        reasoning.append(str(thought))
+                    if getattr(choice, "finish_reason", None) is not None:
+                        finish = choice.finish_reason
+                if now - progress_at >= 30:
+                    logger.info("LLM stream active: %.0fs, %d chunks", now - started, count)
+                    progress_at = now
+            if finish is None:
+                raise ConnectionError("LLM stream ended without finish_reason; partial output discarded")
+        finally:
+            close = getattr(response, "close", None)
+            if close is not None:
+                close()
+        info.update(stream_chunks=count, finish_reason=finish)
+        return "".join(content), "".join(reasoning), finish, info
+
+    def _request_stream(self, client: Any, kwargs: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]]:
+        from factorminer.agent.provider_config import classify_provider_error
+
+        for attempt in range(self.stream_retries + 1):
+            started = time.monotonic()
+            # SDK retries cover HTTP/handshake failures. Only retry an interrupted
+            # response body here, discarding the entire partial completion.
+            response = client.chat.completions.create(**kwargs)
+            try:
+                parts = self._consume_stream(response, started)
+            except Exception as exc:
+                if attempt >= self.stream_retries or classify_provider_error(exc) not in {"connection", "timeout"}:
+                    raise
+                logger.warning(
+                    "LLM stream disconnected (%s); retrying %d/%d after 2s",
+                    type(exc).__name__, attempt + 1, self.stream_retries,
+                )
+                time.sleep(2)
+                continue
+            parts[3]["stream_retry_count"] = attempt
+            if attempt:
+                # The failed attempt may also have incurred cost without a usage chunk.
+                parts[3]["usage_incomplete"] = True
+            return parts
+        raise AssertionError("stream retry loop exhausted without a result or exception")
+
     def generate(
         self,
         system_prompt: str,
@@ -614,6 +692,7 @@ class OpenAICompatibleProvider(LLMProvider):
         *,
         cacheable_prefix: str | None = None,
     ) -> str:
+        self._last_call = {}
         client = self._get_client()
         kwargs = self.build_request_kwargs(
             system_prompt,
@@ -629,16 +708,21 @@ class OpenAICompatibleProvider(LLMProvider):
             temperature,
             self.timeout_s,
         )
-        response = client.chat.completions.create(**kwargs)
-        self._last_call = _openai_call_info(self.model, response)
-        message = response.choices[0].message
-        text, inline_thinking = split_thinking(message.content or "")
-        # Reasoning models served with a reasoning parser return it separately.
-        reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None)
+        if self.stream:
+            kwargs.update(stream=True, stream_options={"include_usage": True})
+        if self.stream:
+            raw, reasoning, finish, self._last_call = self._request_stream(client, kwargs)
+        else:
+            response = client.chat.completions.create(**kwargs)
+            self._last_call = _openai_call_info(self.model, response)
+            message = response.choices[0].message
+            raw = message.content or ""
+            reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None)
+            finish = getattr(response.choices[0], "finish_reason", None)
+        text, inline_thinking = split_thinking(raw)
         thinking = "\n".join(part for part in (str(reasoning or ""), inline_thinking) if part)
         if thinking:
             self._last_call["thinking"] = thinking
-        finish = getattr(response.choices[0], "finish_reason", None)
         if finish == "length" and not text.strip():
             logger.warning(
                 "OpenAI-compatible response hit max_tokens before any answer "
@@ -1029,6 +1113,8 @@ def _build_raw_provider(config: dict[str, Any], role: str) -> LLMProvider:
             kwargs["extra_body"] = dict(config["extra_body"])
         if config.get("context_window"):
             kwargs["context_window"] = int(config["context_window"])
+        kwargs["stream"] = bool(config.get("stream", False))
+        kwargs["stream_retries"] = int(config.get("stream_retries", 0))
         return cls(**kwargs)
 
     # Official hosted providers: each role resolves its own credential.

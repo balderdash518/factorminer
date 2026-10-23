@@ -158,11 +158,25 @@ class FactorGenerator:
             if call.get("thinking"):
                 output = {"role": "assistant", "content": text, "thinking": call["thinking"]}
             route = {"route": call["route"], "draft_usage": draft_usage} if call.get("route") else None
+            call_metadata = {
+                key: call[key] for key in (
+                    "stream", "first_chunk_seconds", "stream_chunks", "finish_reason",
+                    "stream_retry_count", "usage_incomplete",
+                )
+                if key in call
+            }
+            if route:
+                call_metadata.update(route)
             generation.update(
                 output=output,
                 model=call.get("model"),
                 usage_details=usage or None,
-                metadata=route,
+                metadata={
+                    "provider": self.llm_provider.provider_name,
+                    "batch": self._generation_count,
+                    "force_frontier": force_frontier,
+                    **call_metadata,
+                } if call_metadata else route,
             )
             return text
 

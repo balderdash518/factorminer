@@ -107,6 +107,7 @@ _NAME_KINDS = (
     ("authentication", "auth"), ("permissiondenied", "auth"), ("missingapikey", "auth"),
     ("unauthenticated", "auth"), ("ratelimit", "rate_limit"), ("resourceexhausted", "rate_limit"),
     ("timeout", "timeout"), ("deadlineexceeded", "timeout"), ("connection", "connection"),
+    ("protocolerror", "connection"), ("readerror", "connection"),
     ("badrequest", "bad_request"), ("invalidargument", "bad_request"),
     ("unprocessable", "bad_request"), ("notfound", "bad_request"),
     ("internalserver", "server"), ("serviceunavailable", "server"), ("overloaded", "server"),

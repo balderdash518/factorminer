@@ -486,6 +486,7 @@ class RalphLoop:
             self.generator.llm_provider,
             render_batch_feedback(feedback, self.memory.state.feedback_history[:-1]),
             library_formulas=[factor.formula for factor in self.library.list_factors()],
+            max_tokens=int(getattr(memory_cfg, "reflection_max_tokens", 1024)),
         )
         self.budget.record_llm_call()
         if reflection:

@@ -122,7 +122,21 @@ pytest 默认隔离真实 `.env` 和 Langfuse 凭据；真实云端检查应在 
 
 参考：[变量编译](https://langfuse.com/docs/prompt-management/features/variables)、[关联 generation](https://langfuse.com/docs/prompt-management/features/link-to-traces)。
 
-## 6. 边界
+## 6. 兼容接口的流式请求与超时
+
+`llm.stream: true` 为 OpenAI-compatible 接口开启 SSE。推理模型逐步发送思考和回答，降低非流式请求长时间没有响应而触发代理超时的风险。`neuroii_qwen.yaml` 默认开启；其他配置默认关闭。源站排队、长时间没有首个 chunk 或代理缓冲流式响应时，仍可能超时；客户端 `timeout_s` 无法修改服务端代理的时限。
+
+流式读取保留 `reasoning_content` 和跨 chunk 的 `<think>` 内容，并读取最终 usage-only chunk。未收到 `finish_reason` 的断开会报错，不会把半截内容送入因子解析。运行日志会显示首个 chunk 到达时间和每 30 秒的接收进度；generation metadata 中记录 `stream`、`first_chunk_seconds`、`stream_chunks`、`finish_reason`。
+
+`llm.stream_retries` 对已建立流后出现的连接/读取超时提供有界重试，默认 0，Qwen 配置为 1。重试会丢弃前一次的全部片段；HTTP 建连错误继续由 SDK 处理。`stream_retry_count` 记录重试次数；重试过的调用标记 `usage_incomplete`，因为失败流可能产生了未收到 usage 的费用。反思失败仍为 advisory，不会中断挖掘。
+
+`memory.reflection_max_tokens` 控制批次反思的输出预算。一般默认 1024；Qwen 配置使用 8192，避免推理内容用完预算而尚未输出反思 JSON。开启流式不会关闭模型思考，也不会降低 IC/相关性门槛。
+
+失败时 checkpoint 会保留已完成轮次的因子库和记忆。保持同一个输出目录会自动读取 checkpoint；`mine -n N` 的 N 是累计迭代编号上限，失败轮次也可能已经占用一个编号，恢复前应核对 `checkpoint/loop_state.json`。
+
+参考：[Cloudflare 524](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-524/)、[流式 usage chunk](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)。
+
+## 7. 边界
 
 - 追踪只读取运行数据，不改变挖掘结果；导出失败只记日志，不中断挖掘（有测试覆盖）。
 - Helix 的辩论路径（`agent/specialists.py`、`agent/critic.py`）直接调用模型，尚未单独记录为 generation；默认配置不走该路径。

@@ -44,6 +44,8 @@ def _create_llm_provider(cfg, mock: bool):
         "model": llm_cfg.model,
         "prompt_cache": bool(getattr(llm_cfg, "prompt_cache", True)),
         "timeout_s": float(getattr(llm_cfg, "timeout_s", 120.0)),
+        "stream": bool(getattr(llm_cfg, "stream", False)),
+        "stream_retries": int(getattr(llm_cfg, "stream_retries", 0)),
     }
     # Use api_key from config if set (frontier providers only)
     raw_llm = {}

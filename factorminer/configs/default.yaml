@@ -172,6 +172,10 @@ llm:
 
   # Request timeout seconds for frontier HTTP clients.
   timeout_s: 120.0
+  # Opt-in SSE for OpenAI-compatible endpoints; reasoning keeps proxy connections active.
+  stream: false
+  # Retry interrupted SSE bodies at most this many times (partial text is discarded).
+  stream_retries: 0
 
   # Optional OpenAI-compatible base_url (local YAML only — SSRF-sensitive;
   # never accept from remote/untrusted input). Prefer cascade.draft_base_url
@@ -233,6 +237,7 @@ memory:
   # propose hypotheses for the next batch (one extra call per iteration).
   # Not part of the paper protocol; numbers in the prompt remain evaluator-computed.
   llm_reflection: false
+  reflection_max_tokens: 1024
 
 # ---------------------------------------------------------------------------
 # Benchmarking and reporting

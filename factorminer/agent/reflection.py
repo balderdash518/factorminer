@@ -113,11 +113,18 @@ def reflect_on_batch(
             return None
         call = provider_call_info(provider)
         reflection = parse_reflection(raw)
+        output = {"role": "assistant", "content": raw, "thinking": call["thinking"]} if call.get("thinking") else raw
         generation.update(
-            output=raw,
+            output=output,
             model=call.get("model"),
             usage_details=call.get("usage") or None,
-            metadata={"parsed": reflection is not None},
+            metadata={"parsed": reflection is not None, **{
+                key: call[key] for key in (
+                    "stream", "first_chunk_seconds", "stream_chunks", "finish_reason",
+                    "stream_retry_count", "usage_incomplete",
+                )
+                if key in call
+            }},
         )
     if reflection is None:
         logger.debug("Batch reflection returned no parseable JSON")

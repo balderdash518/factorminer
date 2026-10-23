@@ -25,6 +25,9 @@ llm:
 
   # Reasoning plus a 40-formula answer can take minutes on a 27B model.
   timeout_s: 600.0
+  # Send reasoning/answer chunks promptly instead of buffering behind the proxy.
+  stream: true
+  stream_retries: 1
 
   # Qwen3-style thinking is on by default. <think> text is separated from the
   # answer (and kept in traces). To turn thinking off on vLLM/SGLang servers,
@@ -32,3 +35,7 @@ llm:
   # extra_body:
   #   chat_template_kwargs:
   #     enable_thinking: false
+
+memory:
+  # Reflection also uses a thinking model; 1024 tokens can end before JSON starts.
+  reflection_max_tokens: 8192

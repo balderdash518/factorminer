@@ -210,6 +210,8 @@ class LLMConfig:
     prompt_cache: bool = True
     # Request timeout seconds (frontier + local compatible clients).
     timeout_s: float = 120.0
+    stream: bool = False
+    stream_retries: int = 0
     # Optional OpenAI-compatible base URL (local YAML only; SSRF-sensitive).
     base_url: str | None = None
     # Cheap-first cascade routing (default OFF). Nested keys under llm.cascade
@@ -245,6 +247,8 @@ class LLMConfig:
             raise ValueError("batch_candidates must be >= 1")
         if self.timeout_s <= 0:
             raise ValueError("timeout_s must be > 0")
+        if self.stream_retries < 0:
+            raise ValueError("stream_retries must be >= 0")
         if self.cascade_timeout_s <= 0:
             raise ValueError("cascade_timeout_s must be > 0")
 
@@ -258,6 +262,7 @@ class MemoryConfig:
     # Extra LLM call per batch that interprets the batch feedback (RD-Agent-style
     # observations / next hypotheses). Off by default: not part of the paper.
     llm_reflection: bool = False
+    reflection_max_tokens: int = 1024
     max_success_patterns: int = 50
     max_failure_patterns: int = 100
     max_insights: int = 30
@@ -290,6 +295,8 @@ class MemoryConfig:
             )
         if self.seed not in ("empty", "paper_defaults"):
             raise ValueError("memory.seed must be one of: empty, paper_defaults")
+        if self.reflection_max_tokens < 1:
+            raise ValueError("memory.reflection_max_tokens must be >= 1")
         if self.max_success_patterns < 1:
             raise ValueError("max_success_patterns must be >= 1")
         if self.max_failure_patterns < 1:

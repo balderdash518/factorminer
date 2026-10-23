@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from factorminer.agent.llm_interface import (
     OpenAICompatibleProvider,
     create_provider,
@@ -122,6 +124,13 @@ def test_neuroii_config_loads() -> None:
     assert raw["llm"]["base_url"] == "https://neuroii.com/v1"
     assert cfg.llm.max_tokens == 24576
     assert raw["llm"]["context_window"] == 32768
+    assert cfg.llm.stream is True
+    assert cfg.memory.reflection_max_tokens == 8192
+
+    from factorminer.cli.app import _create_llm_provider
+
+    cfg._raw = raw
+    assert _create_llm_provider(cfg, mock=False).inner.stream is True
 
 
 def test_max_tokens_shrinks_only_when_prompt_would_overflow_context() -> None:
@@ -140,3 +149,131 @@ def test_no_context_window_keeps_requested_max_tokens() -> None:
     provider, completions = _provider_with(SimpleNamespace(content="x"))
     provider.generate("s" * 100_000, "u", max_tokens=24576)
     assert completions.calls[-1]["max_tokens"] == 24576
+
+
+class _Stream:
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.closed = False
+
+    def __iter__(self):
+        yield from self.chunks
+
+    def close(self):
+        self.closed = True
+
+
+def _chunk(content=None, reasoning=None, finish=None, usage=None):
+    choices = [] if usage else [SimpleNamespace(
+        index=0, delta=SimpleNamespace(content=content, reasoning_content=reasoning),
+        finish_reason=finish,
+    )]
+    return SimpleNamespace(model="served-model", choices=choices, usage=usage)
+
+
+def test_stream_keeps_reasoning_final_answer_and_usage_without_buffering():
+    provider = OpenAICompatibleProvider(
+        model="Qwen/Test", base_url="https://example.test/v1", stream=True,
+    )
+    usage = SimpleNamespace(prompt_tokens=900, completion_tokens=120, prompt_tokens_details=None)
+    stream = _Stream([
+        _chunk(reasoning="compare "), _chunk(reasoning="windows"),
+        _chunk(content="1. a: Neg("), _chunk(content="$close)", finish="stop"),
+        _chunk(usage=usage),
+    ])
+    requests = []
+
+    def create(**kwargs):
+        requests.append(kwargs)
+        # Regression: buffered calls can hit the proxy timeout before returning.
+        if not kwargs.get("stream"):
+            raise TimeoutError("524: origin did not respond within proxy timeout")
+        return stream
+
+    provider._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    assert provider.generate("sys", "user") == "1. a: Neg($close)"
+    assert requests[0]["stream"] is True
+    assert requests[0]["stream_options"] == {"include_usage": True}
+    assert provider.last_call["thinking"] == "compare windows"
+    assert provider.last_call["usage"] == {"input": 900, "output": 120}
+    assert provider.last_call["model"] == "served-model"
+    assert provider.last_call["finish_reason"] == "stop"
+    assert stream.closed
+
+
+def test_stream_splits_think_tags_across_chunks():
+    provider = OpenAICompatibleProvider(base_url="https://example.test/v1", stream=True)
+    stream = _Stream([_chunk(content="<thi"), _chunk(content="nk>plan</th"),
+                      _chunk(content="ink>1. a: Neg($close)", finish="stop")])
+    provider._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+        create=lambda **kwargs: stream,
+    )))
+    assert provider.generate("sys", "user") == "1. a: Neg($close)"
+    assert provider.last_call["thinking"] == "plan"
+
+
+def test_unfinished_stream_discards_partial_answer_and_closes_connection():
+    provider = OpenAICompatibleProvider(base_url="https://example.test/v1", stream=True)
+    stream = _Stream([_chunk(content="1. partial: Neg($close)")])
+    provider._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+        create=lambda **kwargs: stream,
+    )))
+    provider._last_call = {"usage": {"output": 999}, "thinking": "stale"}
+    with pytest.raises(ConnectionError, match="finish_reason"):
+        provider.generate("sys", "user")
+    assert provider.last_call == {}
+    assert stream.closed
+
+
+def test_stream_retries_a_disconnect_once_without_using_partial_text(monkeypatch):
+    provider = OpenAICompatibleProvider(
+        base_url="https://example.test/v1", stream=True, stream_retries=1,
+    )
+    first = _Stream([_chunk(content="1. abandoned: Neg($open)")])
+    second = _Stream([_chunk(content="1. final: Neg($close)", finish="stop")])
+    streams = iter([first, second])
+    requests = []
+
+    def create(**kwargs):
+        requests.append(kwargs)
+        return next(streams)
+
+    monkeypatch.setattr("factorminer.agent.llm_interface.time.sleep", lambda _: None)
+    provider._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    assert provider.generate("sys", "user") == "1. final: Neg($close)"
+    assert len(requests) == 2
+    assert first.closed and second.closed
+    assert provider.last_call["stream_retry_count"] == 1
+    assert provider.last_call["usage_incomplete"] is True
+
+
+def test_remote_protocol_error_is_a_connection_failure():
+    httpx = pytest.importorskip("httpx")
+    from factorminer.agent.provider_config import classify_provider_error
+
+    assert classify_provider_error(httpx.RemoteProtocolError("incomplete chunked read")) == "connection"
+
+
+def test_repeated_protocol_disconnects_stop_at_the_configured_retry_limit(monkeypatch):
+    httpx = pytest.importorskip("httpx")
+
+    def broken():
+        yield _chunk(content="partial")
+        raise httpx.RemoteProtocolError("incomplete chunked read")
+
+    provider = OpenAICompatibleProvider(base_url="https://example.test/v1", stream=True, stream_retries=1)
+    first, second = _Stream(broken()), _Stream(broken())
+    streams = iter([first, second])
+    requests = []
+
+    def create(**kwargs):
+        requests.append(kwargs)
+        return next(streams)
+
+    monkeypatch.setattr("factorminer.agent.llm_interface.time.sleep", lambda _: None)
+    provider._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    with pytest.raises(httpx.RemoteProtocolError):
+        provider.generate("sys", "user")
+    assert len(requests) == 2
+    assert first.closed and second.closed
+    assert provider.last_call == {}
