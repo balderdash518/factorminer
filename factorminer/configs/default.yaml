@@ -421,6 +421,9 @@ observability:
   # langfuse package is installed (pip install 'factorminer[observability]').
   # "on" warns when they are missing; "off" disables Langfuse.
   langfuse: "auto"
+  # Fetch production prompt versions and link them to LLM generations.
+  # Publish explicitly with scripts/sync_langfuse_prompts.py; offline uses local prompts.
+  prompt_management: true
   # Always-on offline copy: <output_dir>/trace_log.jsonl (+ system_prompts/).
   local_log: true
   # Keeps test runs out of production dashboards in Langfuse.

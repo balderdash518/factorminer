@@ -23,6 +23,11 @@ import re
 from typing import Any
 
 from factorminer.agent.llm_interface import provider_call_info
+from factorminer.agent.prompt_management import (
+    REFLECTION_USER_TEMPLATE,
+    render_template,
+    resolve_prompt,
+)
 from factorminer.utils.tracing import get_tracer
 
 logger = logging.getLogger(__name__)
@@ -40,15 +45,8 @@ _MAX_ITEMS = 4
 
 def build_reflection_prompt(evidence: str, library_formulas: list[str] | None = None) -> str:
     library_block = "\n".join(f"  - {f}" for f in (library_formulas or [])[-30:]) or "  (empty)"
-    return (
-        f"{evidence}\n\n"
-        f"Current library formulas:\n{library_block}\n\n"
-        "Return ONLY a JSON object with these keys:\n"
-        '  "observations": up to 4 short statements of what the evidence shows,\n'
-        '  "hypotheses": up to 4 testable ideas for the next batch, each naming the '
-        "mechanism and why it should be both predictive and uncorrelated with the library,\n"
-        '  "avoid": up to 4 structures or neighbourhoods the next batch should not repeat.\n'
-        "Each item is one sentence (max 40 words)."
+    return render_template(
+        REFLECTION_USER_TEMPLATE, {"evidence": evidence, "library_formulas": library_block},
     )
 
 
@@ -88,16 +86,23 @@ def reflect_on_batch(
     if not evidence.strip():
         return None
     prompt = build_reflection_prompt(evidence, library_formulas)
+    system, prompt, managed = resolve_prompt(
+        "reflect-on-batch", REFLECTION_SYSTEM_PROMPT, prompt,
+        {"evidence": evidence, "library_formulas": "\n".join(
+            f"  - {f}" for f in (library_formulas or [])[-30:]
+        ) or "  (empty)"},
+    )
     with get_tracer().generation(
         "reflect-on-batch",
         model=getattr(provider, "model", None),
-        system_prompt=REFLECTION_SYSTEM_PROMPT,
+        system_prompt=system,
         user_prompt=prompt,
+        prompt=managed,
         model_parameters={"temperature": temperature, "max_tokens": max_tokens},
     ) as generation:
         try:
             raw = provider.generate(
-                system_prompt=REFLECTION_SYSTEM_PROMPT,
+                system_prompt=system,
                 user_prompt=prompt,
                 temperature=temperature,
                 max_tokens=max_tokens,

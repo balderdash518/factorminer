@@ -93,9 +93,38 @@ for r in rows:
 print(next(r for r in rows if r["name"] == "propose-factors" and r["iteration"] == 5)["input"][1]["content"])
 ```
 
-## 5. 边界
+## 5. Prompt Management
+
+主流程使用三个独立的 chat prompt，并通过 generation 的 `prompt` 字段关联到实际使用的版本：
+
+| Prompt | 动态变量 | 记录节点 |
+|---|---|---|
+| `factorminer/propose-factors` | `batch_context`：本轮任务、记忆、因子库与输出格式 | `propose-factors` |
+| `factorminer/repair-formulas` | `broken_formulas`：带解析错误的公式列表 | `repair-formulas` |
+| `factorminer/reflect-on-batch` | `evidence`、`library_formulas`：评估证据与当前库 | `reflect-on-batch` |
+
+模板保留现有指令。代码先生成动态上下文，再从 Langfuse 读取 `production` 标签的模板并编译；实际编译后的内容同时用于模型请求和 Input 记录。本地 JSONL 的 `prompt` 字段记录名称和版本。
+
+首次发布或将代码中的模板更新同步到云端：
+
+```bash
+# 预览：只写入 output/langfuse-prompts/，不访问云端
+uv run --no-sync python scripts/sync_langfuse_prompts.py
+# 发布：使用 .env 中的 Langfuse 凭据，相同模板不会重复创建版本
+uv run --no-sync python scripts/sync_langfuse_prompts.py --apply
+```
+
+在 Langfuse 中修改模板后，将目标版本标为 `production`。SDK 使用默认的 prompt 缓存策略，更新不保证即时生效。发布脚本以本地模板为准，重新执行 `--apply` 会将本地内容发布为 production，因此不要用它覆盖尚未同步回代码的云端编辑。
+
+`observability.prompt_management: false` 可关闭托管模板读取，保留追踪。没有凭据、云端不可用、模板变量或消息结构不兼容时继续使用本地提示词，且不关联一个未实际使用的版本。自定义 specialist/system prompt 和变化后的特征注册表不会被默认模板覆盖。离线失败后，同一轮运行不反复请求该模板。
+
+pytest 默认隔离真实 `.env` 和 Langfuse 凭据；真实云端检查应在 pytest 之外显式运行，并使用独立 session 和验证标签。历史 trace 不自动补写 prompt 版本。
+
+参考：[变量编译](https://langfuse.com/docs/prompt-management/features/variables)、[关联 generation](https://langfuse.com/docs/prompt-management/features/link-to-traces)。
+
+## 6. 边界
 
 - 追踪只读取运行数据，不改变挖掘结果；导出失败只记日志，不中断挖掘（有测试覆盖）。
 - Helix 的辩论路径（`agent/specialists.py`、`agent/critic.py`）直接调用模型，尚未单独记录为 generation；默认配置不走该路径。
 - Google 提供方的 token 用量取自 `usage_metadata`，仅在 SDK 返回时记录。
-- 已在本地验证：mock 运行的本地记录；用内存 OpenTelemetry 导出器检查 span 层级、类型、session、tags、environment、模型与输入输出。**尚未对真实 Langfuse 服务器验证**（score 通过 REST 发送，需要真实 key 才能确认在 UI 中显示）。
+- 已验证：mock 的本地记录及云端 observation 输入输出；Prompt Management 的离线回退、版本关联和测试隔离由针对性测试覆盖。实际云端验证结果保存在忽略目录 `output/verification/`，不会随仓库发布。

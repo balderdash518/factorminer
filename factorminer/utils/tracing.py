@@ -84,6 +84,7 @@ class MiningTracer:
         tags: list[str] | None = None,
         metadata: Mapping[str, Any] | None = None,
         sample_rate: float = 1.0,
+        prompt_management: bool = True,
     ) -> None:
         self.session_id = _ascii(session_id)[:200]
         self.tags = sorted({_ascii(tag)[:200] for tag in (tags or []) if tag})
@@ -91,6 +92,8 @@ class MiningTracer:
             _ascii(str(key)): _short(value) for key, value in dict(metadata or {}).items()
         }
         self.environment = environment
+        self._prompt_management = prompt_management
+        self._prompt_failures: set[str] = set()
         self._iteration: int | None = None
         self._trace_id: str | None = None
         self._local_path: Path | None = None
@@ -201,6 +204,9 @@ class MiningTracer:
         for key in ("model", "model_parameters"):
             if generation_fields.get(key) is not None:
                 record[key] = generation_fields[key]
+        prompt = generation_fields.get("prompt")
+        if prompt is not None:
+            record["prompt"] = {"name": prompt.name, "version": prompt.version}
 
         remote_cm = None
         if self._client is not None:
@@ -243,6 +249,7 @@ class MiningTracer:
         user_prompt: str,
         model_parameters: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,
+        prompt: Any = None,
     ):
         """LLM call observation; input is the role-labelled message list."""
         messages = [
@@ -256,7 +263,21 @@ class MiningTracer:
             metadata=metadata,
             model=model,
             model_parameters=dict(model_parameters or {}),
+            prompt=prompt,
         )
+
+    def get_prompt(self, name: str) -> Any:
+        """Read a cached production chat prompt; never publish during mining."""
+        if self._client is None or not self._prompt_management or name in self._prompt_failures:
+            return None
+        try:
+            return self._client.get_prompt(
+                name, type="chat", label="production", max_retries=0, fetch_timeout_seconds=3,
+            )
+        except Exception as exc:
+            self._prompt_failures.add(name)
+            logger.warning("Using local prompt for %s (%s)", name, type(exc).__name__)
+            return None
 
     def score_iteration(self, name: str, value: float, *, comment: str | None = None) -> None:
         """Attach a numeric score to the current iteration's trace."""
@@ -322,6 +343,9 @@ class MiningTracer:
 class _NullTracer:
     langfuse_enabled = False
 
+    def get_prompt(self, name: str) -> Any:
+        return None
+
     @contextmanager
     def iteration(self, iteration: int, *, input: Any = None) -> Iterator[Any]:
         yield _NullObservation()
@@ -381,6 +405,7 @@ def tracer_from_config(
         environment=str(getattr(section, "environment", "development")),
         release=getattr(section, "release", None) or None,
         sample_rate=float(getattr(section, "sample_rate", 1.0)),
+        prompt_management=bool(getattr(section, "prompt_management", True)),
         tags=tags,
         metadata=metadata,
     )

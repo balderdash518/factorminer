@@ -19,6 +19,11 @@ from typing import Any
 from factorminer.agent.llm_interface import CascadeProvider, LLMProvider, provider_call_info
 from factorminer.agent.output_parser import CandidateFactor, parse_llm_output
 from factorminer.agent.prompt_builder import PromptBuilder
+from factorminer.agent.prompt_management import (
+    REPAIR_USER_TEMPLATE,
+    render_template,
+    resolve_prompt,
+)
 from factorminer.utils.tracing import get_tracer
 
 logger = logging.getLogger(__name__)
@@ -107,17 +112,23 @@ class FactorGenerator:
         max_tokens: int,
         force_frontier: bool = False,
         observation: str = "propose-factors",
+        prompt_variables: dict[str, str] | None = None,
     ) -> str:
         """Invoke the provider, optionally forcing cascade frontier repair.
 
         Each call is one ``generation`` observation (prompts, raw output,
         model, token usage, thinking) and adds to ``last_batch_usage``.
         """
+        system_prompt, user_prompt, managed = resolve_prompt(
+            observation, system_prompt, user_prompt,
+            prompt_variables if prompt_variables is not None else {"batch_context": user_prompt},
+        )
         with get_tracer().generation(
             observation,
             model=getattr(self.llm_provider, "model", None),
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            prompt=managed,
             model_parameters={"temperature": temperature, "max_tokens": max_tokens},
             metadata={
                 "provider": self.llm_provider.provider_name,
@@ -328,17 +339,10 @@ class FactorGenerator:
             if not failed:
                 break
 
-            repair_prompt = (
-                "The following factor formulas failed to parse. "
-                "Fix each one so it uses ONLY valid operators and features "
-                "from the library. Return them in the same numbered format:\n"
-                "<number>. <name>: <corrected_formula>\n\n"
-                "Broken formulas:\n"
-                + "\n".join(f"  {i+1}. {f}" for i, f in enumerate(failed))
-                + "\n\nFix all syntax errors, unknown operators, and invalid "
-                "feature names. Every formula must be a valid nested function "
-                "call using only operators from the library."
-            )
+            repair_variables = {"broken_formulas": "\n".join(
+                f"  {i+1}. {f}" for i, f in enumerate(failed)
+            )}
+            repair_prompt = render_template(REPAIR_USER_TEMPLATE, repair_variables)
 
             try:
                 raw = self._call_llm(
@@ -348,6 +352,7 @@ class FactorGenerator:
                     max_tokens=self.max_tokens,
                     force_frontier=True,
                     observation="repair-formulas",
+                    prompt_variables=repair_variables,
                 )
             except Exception as e:
                 logger.warning("Retry attempt %d failed: %s", attempt, e)

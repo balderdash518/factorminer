@@ -15,6 +15,14 @@ from factorminer.memory.formation import form_memory
 from factorminer.memory.retrieval import retrieve_memory
 
 
+@pytest.fixture(autouse=True)
+def _isolate_cloud_tracing(monkeypatch, tmp_path):
+    """Tests must not load repository credentials or export cloud observations."""
+    monkeypatch.setenv("FACTORMINER_ENV_FILE", str(tmp_path / ".env-not-present"))
+    for name in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST", "LANGFUSE_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+
+
 class _MemoryPolicyHarness:
     """Test harness over the canonical memory functions, not a runtime facade."""
 

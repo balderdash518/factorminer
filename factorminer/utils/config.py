@@ -737,6 +737,7 @@ class ObservabilityConfig:
     environment: str = "development"
     release: str = ""
     sample_rate: float = 1.0
+    prompt_management: bool = True
 
     def validate(self) -> None:
         if self.langfuse not in ("auto", "on", "off"):
