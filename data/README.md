@@ -24,4 +24,4 @@ uv run factorminer -c factorminer/configs/binance_sample.yaml \
 
 Use this panel for installation, schema, and workflow checks. It is not the
 full research-paper dataset. Larger comparisons need a separately sourced
-panel with matching targets and splits; see [reproducibility](../docs/reproducibility.md).
+panel with matching targets and splits; see [reproducibility](../docs/upstream/reproducibility.md).

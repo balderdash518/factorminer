@@ -1,8 +1,8 @@
 """Exact, cached Spearman dependence for library admission and replacement.
 
-:class:`DependenceIndex` computes the same mean absolute Spearman correlation
-as :class:`~factorminer.domain.dependence.SpearmanDependenceMetric`, bit for
-bit, with two savings:
+:class:`DependenceIndex` computes the same time-averaged Spearman dependence
+as :class:`~factorminer.domain.dependence.SpearmanDependenceMetric` (either
+aggregation), bit for bit, with two savings:
 
 * each signal is ranked once per period (its *prepared* form) instead of once
   per pair; a pair re-ranks only the periods where one signal's own NaN mask
@@ -31,6 +31,7 @@ from scipy.stats import rankdata  # type: ignore[import-untyped]
 
 from factorminer.domain.dependence import (
     DependenceMetric,
+    MeanAbsSpearmanDependenceMetric,
     SpearmanDependenceMetric,
     build_dependence_metric,
 )
@@ -55,7 +56,8 @@ class DependenceIndex:
         self._prepared: OrderedDict[int, _Prepared] = OrderedDict()
         self._refs: dict[int, weakref.ref[np.ndarray]] = {}
         self._fingerprints: dict[int, bytes] = {}
-        self._pairs: dict[tuple[int, int], float] = {}
+        # Pair -> (signed mean, mean of absolute) per-period correlation.
+        self._pairs: dict[tuple[int, int], tuple[float, float]] = {}
         self._pairs_by_id: dict[int, set[tuple[int, int]]] = {}
         self._lock = threading.RLock()
         self.prepared_bytes = 0
@@ -131,8 +133,18 @@ class DependenceIndex:
     # Pair dependence
     # ------------------------------------------------------------------
 
-    def compute(self, signals_a: np.ndarray, signals_b: np.ndarray) -> float:
-        """Mean absolute Spearman correlation, identical to the reference metric."""
+    def compute(
+        self,
+        signals_a: np.ndarray,
+        signals_b: np.ndarray,
+        *,
+        absolute_per_period: bool = False,
+    ) -> float:
+        """Spearman dependence, identical to the reference metric.
+
+        ``absolute_per_period`` selects ``mean_t |Corr_t|`` instead of the
+        paper's ``|mean_t Corr_t|``; both come from one cached pass.
+        """
         if signals_a.shape != signals_b.shape:
             raise ValueError(f"Signal shapes must match: {signals_a.shape} vs {signals_b.shape}")
         if signals_a.ndim != 2:
@@ -144,7 +156,7 @@ class DependenceIndex:
             cached = self._pairs.get(pair)
             if cached is not None:
                 self.pair_hits += 1
-                return cached
+                return cached[1] if absolute_per_period else abs(cached[0])
             self.pair_misses += 1
             prepared_a = self._prepare(ident_a, signals_a)
             prepared_b = self._prepare(ident_b, signals_b)
@@ -152,7 +164,7 @@ class DependenceIndex:
             self._pairs[pair] = value
             self._pairs_by_id.setdefault(ident_a, set()).add(pair)
             self._pairs_by_id.setdefault(ident_b, set()).add(pair)
-            return value
+            return value[1] if absolute_per_period else abs(value[0])
 
     def _pair(
         self,
@@ -160,8 +172,9 @@ class DependenceIndex:
         signals_b: np.ndarray,
         prepared_a: _Prepared,
         prepared_b: _Prepared,
-    ) -> float:
+    ) -> tuple[float, float]:
         correlation_sum = 0.0
+        abs_sum = 0.0
         period_count = 0
         for start in range(0, signals_a.shape[1], _CHUNK):
             window = slice(start, start + _CHUNK)
@@ -187,14 +200,17 @@ class DependenceIndex:
                 np.sum(ranked_a**2, axis=0) * np.sum(ranked_b**2, axis=0)
             )
             correlations = np.divide(
-                np.abs(numerator),
+                numerator,
                 denominator,
                 out=np.zeros_like(numerator),
                 where=denominator >= 1e-12,
             )
             correlation_sum += float(np.sum(correlations))
+            abs_sum += float(np.sum(np.abs(correlations)))
             period_count += int(correlations.size)
-        return correlation_sum / period_count if period_count else 0.0
+        if not period_count:
+            return 0.0, 0.0
+        return correlation_sum / period_count, abs_sum / period_count
 
     def _joint_ranks(
         self,
@@ -250,12 +266,16 @@ class IndexedSpearmanMetric(SpearmanDependenceMetric):
     index: DependenceIndex = field(default_factory=DependenceIndex, compare=False, repr=False)
 
     def compute(self, signals_a: np.ndarray, signals_b: np.ndarray) -> float:
-        return self.index.compute(signals_a, signals_b)
+        return self.index.compute(
+            signals_a, signals_b, absolute_per_period=self.absolute_per_period
+        )
 
 
 def indexed_dependence_metric(name: str | None) -> DependenceMetric:
     """Build a dependence metric, using the exact index for Spearman."""
     metric = build_dependence_metric(name)
-    if type(metric) is SpearmanDependenceMetric:
-        return IndexedSpearmanMetric()
+    if type(metric) in (SpearmanDependenceMetric, MeanAbsSpearmanDependenceMetric):
+        return IndexedSpearmanMetric(
+            name=metric.name, absolute_per_period=metric.absolute_per_period
+        )
     return metric

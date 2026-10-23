@@ -16,11 +16,19 @@ import logging
 import time
 from typing import Any
 
-from factorminer.agent.llm_interface import CascadeProvider, LLMProvider
+from factorminer.agent.llm_interface import CascadeProvider, LLMProvider, provider_call_info
 from factorminer.agent.output_parser import CandidateFactor, parse_llm_output
 from factorminer.agent.prompt_builder import PromptBuilder
+from factorminer.utils.tracing import get_tracer
 
 logger = logging.getLogger(__name__)
+
+
+def _with_error(candidate: CandidateFactor) -> str:
+    """Show the parser error next to a broken formula in the repair prompt."""
+    if candidate.parse_error:
+        return f"{candidate.formula}    [parser error: {candidate.parse_error}]"
+    return candidate.formula
 
 
 class FactorGenerator:
@@ -66,6 +74,8 @@ class FactorGenerator:
             else self.prompt_builder.system_prompt
         )
         self._generation_count = 0
+        # Token totals of the latest generate_batch call (all LLM calls in it).
+        self.last_batch_usage: dict[str, int] = {}
 
     @staticmethod
     def _unwrap_cascade_provider(provider: LLMProvider) -> CascadeProvider | None:
@@ -96,8 +106,64 @@ class FactorGenerator:
         temperature: float,
         max_tokens: int,
         force_frontier: bool = False,
+        observation: str = "propose-factors",
     ) -> str:
-        """Invoke the provider, optionally forcing cascade frontier repair."""
+        """Invoke the provider, optionally forcing cascade frontier repair.
+
+        Each call is one ``generation`` observation (prompts, raw output,
+        model, token usage, thinking) and adds to ``last_batch_usage``.
+        """
+        with get_tracer().generation(
+            observation,
+            model=getattr(self.llm_provider, "model", None),
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model_parameters={"temperature": temperature, "max_tokens": max_tokens},
+            metadata={
+                "provider": self.llm_provider.provider_name,
+                "batch": self._generation_count,
+                "force_frontier": force_frontier,
+            },
+        ) as generation:
+            text = self._invoke_provider(
+                system_prompt,
+                user_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                force_frontier=force_frontier,
+            )
+            call = provider_call_info(self.llm_provider)
+            usage = dict(call.get("usage") or {})
+            # A rejected cascade draft is a different model: count its tokens
+            # in the batch totals but keep them out of this generation's cost.
+            draft_usage = dict(call.get("draft_usage") or {})
+            for bucket in (usage, draft_usage):
+                for key in ("input", "output"):
+                    self.last_batch_usage[key] = self.last_batch_usage.get(key, 0) + int(
+                        bucket.get(key, 0)
+                    )
+            self.last_batch_usage["calls"] = self.last_batch_usage.get("calls", 0) + 1
+            output: object = text
+            if call.get("thinking"):
+                output = {"role": "assistant", "content": text, "thinking": call["thinking"]}
+            route = {"route": call["route"], "draft_usage": draft_usage} if call.get("route") else None
+            generation.update(
+                output=output,
+                model=call.get("model"),
+                usage_details=usage or None,
+                metadata=route,
+            )
+            return text
+
+    def _invoke_provider(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        temperature: float,
+        max_tokens: int,
+        force_frontier: bool,
+    ) -> str:
         kwargs = {
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
@@ -154,6 +220,7 @@ class FactorGenerator:
 
         self._generation_count += 1
         batch_id = self._generation_count
+        self.last_batch_usage = {}
 
         logger.info(
             "Generating batch #%d: size=%d, provider=%s",
@@ -198,7 +265,7 @@ class FactorGenerator:
 
         # 4. Retry failed parses (always frontier under CascadeProvider)
         if failed_lines or invalid:
-            retry_input = failed_lines + [c.formula for c in invalid if c.formula]
+            retry_input = failed_lines + [_with_error(c) for c in invalid if c.formula]
             retried = self._retry_failed_parses(retry_input, attempts=2)
             if retried:
                 # Deduplicate by formula
@@ -280,6 +347,7 @@ class FactorGenerator:
                     temperature=max(0.3, self.temperature - 0.3),
                     max_tokens=self.max_tokens,
                     force_frontier=True,
+                    observation="repair-formulas",
                 )
             except Exception as e:
                 logger.warning("Retry attempt %d failed: %s", attempt, e)
@@ -290,7 +358,7 @@ class FactorGenerator:
             recovered.extend(new_valid)
 
             # Update failed list for next attempt
-            failed = still_failed + [c.formula for c in candidates if not c.is_valid]
+            failed = still_failed + [_with_error(c) for c in candidates if not c.is_valid]
 
             logger.debug(
                 "Retry attempt %d: recovered %d, still failing %d",

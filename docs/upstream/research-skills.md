@@ -7,7 +7,7 @@ Evaluation and admission use the normal engine services.
 
 ## Collect source experience
 
-Copy the [action-planner profile](../factorminer/configs/research_actions_deepseek.yaml)
+Copy the [action-planner profile](../../factorminer/configs/research_actions_deepseek.yaml)
 to a local config, retain its model/data settings, and set:
 
 ```yaml

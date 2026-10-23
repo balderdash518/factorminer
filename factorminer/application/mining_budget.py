@@ -73,6 +73,37 @@ class BudgetTracker:
 # Candidate evaluation result
 # ---------------------------------------------------------------------------
 
+# Candidate outcomes. Implementation failures (parse/compute/invalid) say the
+# formula did not run as written; quality and redundancy failures say it ran
+# and was judged. Feedback and memory keep the two apart.
+OUTCOME_PARSE_ERROR = "parse_error"
+OUTCOME_COMPUTE_ERROR = "compute_error"
+OUTCOME_INVALID_SIGNAL = "invalid_signal"
+OUTCOME_LOW_IC = "low_ic"
+OUTCOME_LOW_ICIR = "low_icir"
+OUTCOME_REDUNDANT = "redundant"
+OUTCOME_BATCH_DUPLICATE = "batch_duplicate"
+OUTCOME_RESEARCH_REJECTED = "research_rejected"
+OUTCOME_ADMITTED = "admitted"
+OUTCOME_REPLACED = "replaced"
+
+IMPLEMENTATION_FAILURES = frozenset(
+    {OUTCOME_PARSE_ERROR, OUTCOME_COMPUTE_ERROR, OUTCOME_INVALID_SIGNAL}
+)
+REDUNDANCY_FAILURES = frozenset({OUTCOME_REDUNDANT, OUTCOME_BATCH_DUPLICATE})
+OUTCOMES = (
+    OUTCOME_PARSE_ERROR,
+    OUTCOME_COMPUTE_ERROR,
+    OUTCOME_INVALID_SIGNAL,
+    OUTCOME_LOW_IC,
+    OUTCOME_LOW_ICIR,
+    OUTCOME_REDUNDANT,
+    OUTCOME_BATCH_DUPLICATE,
+    OUTCOME_RESEARCH_REJECTED,
+    OUTCOME_ADMITTED,
+    OUTCOME_REPLACED,
+)
+
 
 @dataclass
 class EvaluationResult:
@@ -88,11 +119,16 @@ class EvaluationResult:
     ic_paper_icir: float = 0.0
     ic_win_rate: float = 0.0
     max_correlation: float = 0.0
-    correlated_with: str = ""
+    correlated_with: str = ""  # nearest library factor (by dependence)
+    conflict_count: int = 0  # library factors at or above the correlation threshold
     admitted: bool = False
     replaced: int | None = None  # ID of replaced factor, if any
     rejection_reason: str = ""
     stage_passed: int = 0  # 0=parse/IC fail, 1=IC pass, 2=corr pass, 3=dedup pass, 4=admitted
+    # Structured outcome (one of OUTCOMES) so feedback never has to parse reason text.
+    outcome: str = ""
+    replacement_note: str = ""  # why Stage 2.5 did or did not replace
+    duplicate_of: str = ""  # batch member kept instead of this candidate (Stage 3)
     signals: np.ndarray | None = None
     target_stats: dict[str, dict] = field(default_factory=dict)
     research_score: float = 0.0

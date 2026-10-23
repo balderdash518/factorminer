@@ -8,7 +8,18 @@ from typing import Any
 
 import numpy as np
 
-from factorminer.application.mining_budget import EvaluationResult
+from factorminer.application.mining_budget import (
+    OUTCOME_ADMITTED,
+    OUTCOME_COMPUTE_ERROR,
+    OUTCOME_INVALID_SIGNAL,
+    OUTCOME_LOW_IC,
+    OUTCOME_LOW_ICIR,
+    OUTCOME_PARSE_ERROR,
+    OUTCOME_REDUNDANT,
+    OUTCOME_REPLACED,
+    OUTCOME_RESEARCH_REJECTED,
+    EvaluationResult,
+)
 from factorminer.architecture import EvaluationKernel, LibraryGeometry, PaperProtocol
 from factorminer.core.factor_library import FactorLibrary
 from factorminer.core.types import get_features
@@ -40,7 +51,7 @@ class ValidationPipeline:
         target_horizons: dict[str, int] | None = None,
         library: FactorLibrary | None = None,
         ic_threshold: float = 0.04,
-        icir_threshold: float = 0.5,
+        icir_threshold: float = 0.0,
         replacement_ic_min: float = 0.10,
         replacement_ic_ratio: float = 1.3,
         fast_screen_assets: int = 100,
@@ -158,14 +169,17 @@ class ValidationPipeline:
         except SignalComputationError as exc:
             if "Parse failure" in str(exc):
                 result.rejection_reason = "Parse failure"
+                result.outcome = OUTCOME_PARSE_ERROR
             else:
                 result.rejection_reason = f"Signal computation error: {exc}"
+                result.outcome = OUTCOME_COMPUTE_ERROR
             result.stage_passed = 0
             return result
         result.parse_ok = True
 
         if signals is None or np.all(np.isnan(signals)):
             result.rejection_reason = "All-NaN signals"
+            result.outcome = OUTCOME_INVALID_SIGNAL
             result.stage_passed = 0
             return result
 
@@ -187,6 +201,7 @@ class ValidationPipeline:
                 result.rejection_reason = (
                     f"Fast-screen paper IC {fast_ic:.4f} < threshold {self.ic_threshold}"
                 )
+                result.outcome = OUTCOME_LOW_IC
                 result.stage_passed = 0
                 return result
 
@@ -237,6 +252,7 @@ class ValidationPipeline:
             result.rejection_reason = (
                 f"{quality_label} {quality_gate:.4f} < threshold {self.ic_threshold}"
             )
+            result.outcome = OUTCOME_LOW_IC
             result.stage_passed = 0
             return result
         icir_gate = result.ic_paper_icir
@@ -248,34 +264,40 @@ class ValidationPipeline:
             result.rejection_reason = (
                 f"{icir_label} {icir_gate:.4f} < threshold {self.icir_threshold}"
             )
+            result.outcome = OUTCOME_LOW_ICIR
             result.stage_passed = 0
             return result
         result.stage_passed = 1
 
         if self._research_enabled():
+            self._annotate_library_conflicts(result, signals)
             admitted = bool(quality["admitted"])
             reason = str(quality["admission_reason"])
             if admitted:
                 result.admitted = True
+                result.outcome = OUTCOME_ADMITTED
                 result.stage_passed = 3
                 return result
             result.stage_passed = 2
             result.rejection_reason = reason
+            result.outcome = OUTCOME_RESEARCH_REJECTED
             replace_id, replace_reason = self._research_replacement(result)
+            result.replacement_note = replace_reason
             if replace_id is not None:
                 result.admitted = True
                 result.replaced = replace_id
                 result.rejection_reason = replace_reason
+                result.outcome = OUTCOME_REPLACED
                 result.stage_passed = 3
             return result
 
         # Stage 2: Correlation check against library (admission)
+        self._annotate_library_conflicts(result, signals)
         admitted, reason = self.kernel.admission_decision(result.ic_paper_mean, signals)
         if admitted:
             result.admitted = True
+            result.outcome = OUTCOME_ADMITTED
             result.stage_passed = 3
-            if self.library.size > 0:
-                result.max_correlation = self.geometry.candidate_geometry(signals).max_dependence
             return result
 
         result.stage_passed = 2
@@ -285,18 +307,30 @@ class ValidationPipeline:
             result.ic_paper_mean,
             signals,
         )
+        result.replacement_note = replace_reason
         if should_replace and replace_id is not None:
             result.admitted = True
             result.replaced = replace_id
-            result.max_correlation = self.geometry.candidate_geometry(signals).max_dependence
+            result.outcome = OUTCOME_REPLACED
             result.stage_passed = 3
             return result
 
         # Rejected by correlation
         result.rejection_reason = reason
-        if self.library.size > 0:
-            result.max_correlation = self.geometry.candidate_geometry(signals).max_dependence
+        result.outcome = OUTCOME_REDUNDANT
         return result
+
+    def _annotate_library_conflicts(self, result: EvaluationResult, signals: np.ndarray) -> None:
+        """Record which library factors the candidate collides with (trajectory tau)."""
+        if self.library.size == 0:
+            return
+        geometry = self.geometry.candidate_geometry(signals)
+        result.max_correlation = float(geometry.max_dependence)
+        result.conflict_count = len(geometry.correlated_factor_ids)
+        if geometry.nearest_factor_id is not None:
+            result.correlated_with = (
+                f"#{geometry.nearest_factor_id} {geometry.nearest_factor_name}".strip()
+            )
 
     def _research_enabled(self) -> bool:
         return bool(
@@ -381,7 +415,9 @@ class ValidationPipeline:
         theta, keep the one with higher IC and reject the other.
         """
         before = sum(1 for result in results if result.admitted and result.signals is not None)
-        quality_attr = "research_score" if self._research_enabled() else "ic_mean"
+        # Paper Stage 3 keeps the stronger factor by |IC|; signed IC would drop
+        # strong negative signals whose direction is fixed by sign-flipping.
+        quality_attr = "research_score" if self._research_enabled() else "ic_paper_mean"
         results = self.kernel.deduplicate_results(results, quality_attr=quality_attr)
         dedup_rejected = before - sum(
             1 for result in results if result.admitted and result.signals is not None

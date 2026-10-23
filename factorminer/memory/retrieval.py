@@ -30,6 +30,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from factorminer.memory.feedback import render_batch_feedback
 from factorminer.memory.memory_store import (
     ExperienceMemory,
     ForbiddenDirection,
@@ -836,6 +837,8 @@ def retrieve_memory(
                 "domain_saturation", memory.state.domain_saturation
             ),
             admission_log=memory.state.admission_log,
+            last_batch_feedback=memory.state.last_batch_feedback,
+            feedback_history=memory.state.feedback_history,
         )
     else:
         state = memory.state
@@ -881,12 +884,18 @@ def retrieve_memory(
     prompt_text = _format_for_prompt(
         relevant_success, relevant_forbidden, relevant_insights, lib_state_info
     )
+    feedback_text = render_batch_feedback(
+        state.last_batch_feedback, state.feedback_history
+    )
+    if feedback_text:
+        prompt_text = f"{prompt_text}\n{feedback_text}\n"
 
     return {
         "recommended_directions": [p.to_dict() for p in relevant_success],
         "forbidden_directions": [f.to_dict() for f in relevant_forbidden],
         "insights": [i.to_dict() for i in relevant_insights],
         "library_state": lib_state_info,
+        "batch_feedback": dict(state.last_batch_feedback),
         "prompt_text": prompt_text,
         "retrieval_diagnostics": {
             "query_text": query_text,

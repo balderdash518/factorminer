@@ -1,0 +1,34 @@
+# Qwen/Qwen3.8-27B-FP8 on the OpenAI-compatible endpoint https://neuroii.com/v1
+#
+#   factorminer -c factorminer/configs/neuroii_qwen.yaml mine --data <file>
+#
+# The API key is read from FACTORMINER_COMPAT_API_KEY (put it in .env at the
+# repository root). Never write the key into this file.
+#
+# Server limits: 32768-token context, ~3.8 concurrent full-length requests.
+# The mining loop makes one generation call at a time (plus repair calls,
+# and one reflection call when memory.llm_reflection is on), so keep
+# phase2.debate disabled or its specialist count <= 3.
+
+llm:
+  provider: "openai_compatible"
+  model: "Qwen/Qwen3.8-27B-FP8"
+  base_url: "https://neuroii.com/v1"
+
+  # Output budget for reasoning plus the 40-line answer. The prompt is ~3k
+  # tokens (system) + up to ~5k (user, with full library and memory). If a
+  # prompt is large enough that prompt + max_tokens would exceed
+  # context_window, max_tokens is lowered for that call (the server would
+  # otherwise reject the request).
+  max_tokens: 24576
+  context_window: 32768
+
+  # Reasoning plus a 40-formula answer can take minutes on a 27B model.
+  timeout_s: 600.0
+
+  # Qwen3-style thinking is on by default. <think> text is separated from the
+  # answer (and kept in traces). To turn thinking off on vLLM/SGLang servers,
+  # uncomment:
+  # extra_body:
+  #   chat_template_kwargs:
+  #     enable_thinking: false

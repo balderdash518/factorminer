@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -77,6 +78,101 @@ class LLMProvider(ABC):
     @abstractmethod
     def provider_name(self) -> str:
         """Human-readable provider name."""
+
+    @property
+    def last_call(self) -> dict[str, Any]:
+        """Model, token usage and thinking text of the latest call (empty when unknown).
+
+        Used for tracing and token accounting only; never affects generation.
+        """
+        return dict(getattr(self, "_last_call", None) or {})
+
+
+_THINK_BLOCK = re.compile(r"<think>(.*?)(?:</think>|$)", re.DOTALL | re.IGNORECASE)
+
+
+def split_thinking(text: str) -> tuple[str, str]:
+    """Separate ``<think>...</think>`` reasoning from the answer text.
+
+    An unterminated ``<think>`` (output cut at max_tokens) is all reasoning.
+    A stray leading ``</think>`` (template already opened the block) is dropped
+    together with what precedes it.
+    """
+    if "</think>" in text and "<think>" not in text:
+        reasoning, _, answer = text.partition("</think>")
+        return answer.strip(), reasoning.strip()
+    reasoning = [m.group(1).strip() for m in _THINK_BLOCK.finditer(text)]
+    answer = _THINK_BLOCK.sub("", text).strip()
+    return answer, "\n".join(part for part in reasoning if part)
+
+
+def provider_call_info(provider: Any) -> dict[str, Any]:
+    """``last_call`` of any provider, including duck-typed ones without it."""
+    info = getattr(provider, "last_call", None)
+    return dict(info) if isinstance(info, dict) else {}
+
+
+def _usage_value(usage: Any, *names: str) -> int:
+    for name in names:
+        value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+        if isinstance(value, (int, float)):
+            return int(value)
+    return 0
+
+
+def _openai_call_info(model: str, response: Any) -> dict[str, Any]:
+    """Langfuse-style usage buckets from a chat.completions response."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return {"model": model}
+    details = getattr(usage, "prompt_tokens_details", None)
+    cached = _usage_value(details, "cached_tokens") if details is not None else 0
+    prompt = _usage_value(usage, "prompt_tokens")
+    info: dict[str, Any] = {
+        "model": getattr(response, "model", None) or model,
+        "usage": {
+            "input": max(prompt - cached, 0),
+            "output": _usage_value(usage, "completion_tokens"),
+        },
+    }
+    if cached:
+        info["usage"]["input_cached_tokens"] = cached
+    return info
+
+
+def _anthropic_call_info(model: str, response: Any) -> dict[str, Any]:
+    usage = getattr(response, "usage", None)
+    info: dict[str, Any] = {"model": getattr(response, "model", None) or model}
+    if usage is not None:
+        info["usage"] = {
+            "input": _usage_value(usage, "input_tokens"),
+            "output": _usage_value(usage, "output_tokens"),
+        }
+        for key in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+            value = _usage_value(usage, key)
+            if value:
+                info["usage"][key] = value
+    thinking = [
+        str(getattr(block, "thinking", ""))
+        for block in getattr(response, "content", []) or []
+        if getattr(block, "type", "") == "thinking" and getattr(block, "thinking", "")
+    ]
+    if thinking:
+        info["thinking"] = "\n".join(thinking)
+    return info
+
+
+def _google_call_info(model: str, response: Any) -> dict[str, Any]:
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return {"model": model}
+    return {
+        "model": model,
+        "usage": {
+            "input": _usage_value(usage, "prompt_token_count"),
+            "output": _usage_value(usage, "candidates_token_count"),
+        },
+    }
 
 
 def _prompt_cache_key(prefix: str) -> str:
@@ -201,6 +297,7 @@ class OpenAIProvider(LLMProvider):
             "prompt_cache_key" in kwargs,
         )
         response = client.chat.completions.create(**kwargs)
+        self._last_call = _openai_call_info(self.model, response)
         text = response.choices[0].message.content or ""
         logger.debug("OpenAI response: %d chars", len(text))
         return text
@@ -323,6 +420,7 @@ class AnthropicProvider(LLMProvider):
         )
 
         response = client.messages.create(**kwargs)
+        self._last_call = _anthropic_call_info(self.model, response)
 
         # Extract text from response, skipping thinking blocks
         text_parts = []
@@ -396,6 +494,7 @@ class GoogleProvider(LLMProvider):
                 "max_output_tokens": max_tokens,
             },
         )
+        self._last_call = _google_call_info(self.model, response)
         text = response.text if response.text else ""
         logger.debug("Google response: %d chars", len(text))
         return text
@@ -426,6 +525,8 @@ class OpenAICompatibleProvider(LLMProvider):
         api_key: str | None = None,
         timeout_s: float = 60.0,
         prompt_cache: bool = False,
+        extra_body: dict[str, Any] | None = None,
+        context_window: int | None = None,
     ) -> None:
         # SECURITY (SSRF): base_url is trusted local config only. Do not accept
         # URLs from prompts, remote manifests, or untrusted tool input.
@@ -438,6 +539,12 @@ class OpenAICompatibleProvider(LLMProvider):
         self.api_key = api_key if api_key is not None else "local"
         self.timeout_s = float(timeout_s)
         self.prompt_cache = bool(prompt_cache)
+        # Engine-specific request fields, e.g. vLLM/SGLang
+        # {"chat_template_kwargs": {"enable_thinking": false}} for Qwen3.
+        self.extra_body = dict(extra_body or {})
+        # Server context length. When set, max_tokens is lowered per call so
+        # prompt + max_tokens never exceeds it (servers reject such requests).
+        self.context_window = int(context_window) if context_window else None
         self._client: Any = None
 
     def _get_client(self) -> Any:
@@ -467,7 +574,8 @@ class OpenAICompatibleProvider(LLMProvider):
     ) -> dict[str, Any]:
         """Construct the chat.completions payload (no network I/O)."""
         del cacheable_prefix
-        return {
+        max_tokens = self._fit_max_tokens(system_prompt, user_prompt, max_tokens)
+        kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -476,6 +584,26 @@ class OpenAICompatibleProvider(LLMProvider):
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if self.extra_body:
+            kwargs["extra_body"] = dict(self.extra_body)
+        return kwargs
+
+    def _fit_max_tokens(self, system_prompt: str, user_prompt: str, max_tokens: int) -> int:
+        """Cap max_tokens to the context left after a conservative prompt estimate."""
+        if not self.context_window:
+            return max_tokens
+        # ~2.5 chars/token over-estimates the prompt for English, DSL formulas
+        # and chat-template overhead, so the request stays inside the window.
+        prompt_estimate = (len(system_prompt) + len(user_prompt)) * 2 // 5 + 64
+        available = self.context_window - prompt_estimate - 256
+        if max_tokens <= available:
+            return max_tokens
+        fitted = max(available, 1024)
+        logger.info(
+            "Lowering max_tokens %d -> %d to fit the %d-token context (prompt ~%d tokens)",
+            max_tokens, fitted, self.context_window, prompt_estimate,
+        )
+        return fitted
 
     def generate(
         self,
@@ -502,7 +630,20 @@ class OpenAICompatibleProvider(LLMProvider):
             self.timeout_s,
         )
         response = client.chat.completions.create(**kwargs)
-        text = response.choices[0].message.content or ""
+        self._last_call = _openai_call_info(self.model, response)
+        message = response.choices[0].message
+        text, inline_thinking = split_thinking(message.content or "")
+        # Reasoning models served with a reasoning parser return it separately.
+        reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None)
+        thinking = "\n".join(part for part in (str(reasoning or ""), inline_thinking) if part)
+        if thinking:
+            self._last_call["thinking"] = thinking
+        finish = getattr(response.choices[0], "finish_reason", None)
+        if finish == "length" and not text.strip():
+            logger.warning(
+                "OpenAI-compatible response hit max_tokens before any answer "
+                "(likely spent on reasoning); raise llm.max_tokens or disable thinking"
+            )
         logger.debug("OpenAI-compatible response: %d chars", len(text))
         return text
 
@@ -609,7 +750,9 @@ class CascadeProvider(LLMProvider):
             self.last_draft_error = str(exc)
             logger.warning("Cascade: draft call failed, escalating to frontier: %s", exc)
             draft_text = ""
+        draft_call = provider_call_info(self.draft)
         if draft_text and self._draft_is_acceptable(draft_text):
+            self._last_call = {**draft_call, "route": "draft"}
             logger.debug(
                 "Cascade: draft accepted (provider=%s, %d chars)",
                 self.draft.provider_name,
@@ -625,13 +768,20 @@ class CascadeProvider(LLMProvider):
             self.draft.provider_name,
             self.frontier.provider_name,
         )
-        return self.frontier.generate(
+        text = self.frontier.generate(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
             cacheable_prefix=cacheable_prefix,
         )
+        # The rejected draft also cost tokens; keep its usage for accounting.
+        self._last_call = {
+            **provider_call_info(self.frontier),
+            "route": "frontier_after_draft",
+            "draft_usage": draft_call.get("usage"),
+        }
+        return text
 
     def generate_frontier(
         self,
@@ -644,13 +794,15 @@ class CascadeProvider(LLMProvider):
     ) -> str:
         """Force a frontier call (used by factor-generator repair path)."""
         self.frontier_calls += 1
-        return self.frontier.generate(
+        text = self.frontier.generate(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
             cacheable_prefix=cacheable_prefix,
         )
+        self._last_call = {**provider_call_info(self.frontier), "route": "frontier"}
+        return text
 
     @property
     def provider_name(self) -> str:
@@ -746,6 +898,7 @@ class MockProvider(LLMProvider):
             indices = list(range(min(batch_size, len(self.MOCK_FACTORS))))
 
         self._call_count += 1
+        self._last_call = {"model": "mock"}
 
         lines = []
         for idx, factor_idx in enumerate(indices, 1):
@@ -779,6 +932,10 @@ class PrefixedCacheProvider(LLMProvider):
     @property
     def inner(self) -> LLMProvider:
         return self._inner
+
+    @property
+    def last_call(self) -> dict[str, Any]:
+        return provider_call_info(self._inner)
 
     def generate(
         self,
@@ -868,6 +1025,10 @@ def _build_raw_provider(config: dict[str, Any], role: str) -> LLMProvider:
         if "timeout_s" in config:
             kwargs["timeout_s"] = config["timeout_s"]
         kwargs["prompt_cache"] = bool(config.get("prompt_cache", False))
+        if isinstance(config.get("extra_body"), dict) and config["extra_body"]:
+            kwargs["extra_body"] = dict(config["extra_body"])
+        if config.get("context_window"):
+            kwargs["context_window"] = int(config["context_window"])
         return cls(**kwargs)
 
     # Official hosted providers: each role resolves its own credential.

@@ -28,9 +28,9 @@ fitting, factor weights, hyperparameters, and direction upstream of test data.
 The CLI action lane also purges forward-target overlap from the training end.
 Array callers own alignment, discovery-only slicing, and feature availability.
 
-The [bundled sample](../data/README.md) has a matching configuration and provenance
+The [bundled sample](../../data/README.md) has a matching configuration and provenance
 manifest. Public-data specifications and checksum locks live in
-[`examples/public_evidence/`](../examples/public_evidence/README.md).
+[`examples/public_evidence/`](../../examples/public_evidence/README.md).
 
 Resampling aggregates open/close by first/last source bar, high/low by max/min,
 and volume/amount by sum. VWAP and returns are recomputed:

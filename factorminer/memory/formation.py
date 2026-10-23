@@ -13,6 +13,13 @@ import re
 from collections import Counter, defaultdict
 from typing import Any
 
+from factorminer.memory.feedback import (
+    FEEDBACK_HISTORY_LIMIT,
+    history_row,
+    is_implementation_failure,
+    is_redundancy_failure,
+    summarize_trajectory,
+)
 from factorminer.memory.memory_store import (
     ExperienceMemory,
     ForbiddenDirection,
@@ -25,36 +32,40 @@ from factorminer.memory.memory_store import (
 # Operator-pattern detection helpers
 # ---------------------------------------------------------------------------
 
-# Maps operator substrings to pattern categories
-_PATTERN_SIGNATURES: dict[str, list[str]] = {
-    "Higher Moment Regimes": ["Skew", "Kurt", "IfElse"],
-    "PV Corr Interaction": ["Corr", "$close", "$volume"],
-    "Robust Efficiency": ["Med", "Median"],
-    "Smoothed Efficiency Rank": ["EMA", "CsRank"],
-    "Trend Regression Adaptive": ["Rsquare", "Slope", "Resi", "TsLinReg"],
-    "Logical Or Extreme Regimes": ["Or", "Greater", "Less"],
-    "Kurtosis Regime": ["Kurt", "IfElse"],
-    "Amt Efficiency Rank Interaction": ["$amt", "CsRank"],
+# Named pattern families. Each family lists anchor groups; a formula belongs
+# to the family only if it contains at least one token from *every* group.
+# Operators match by name or name prefix (``TsLinReg`` -> ``TsLinRegSlope``),
+# features match exactly. Names follow the paper's Tables 6/10 so learned
+# entries stay readable; formulas outside every family get a structural name.
+_PATTERN_SIGNATURES: dict[str, list[list[str]]] = {
+    "Higher Moment Regimes": [["Skew", "Kurt"], ["IfElse"]],
+    "PV Corr Interaction": [["Corr", "Cov"], ["$volume", "$amt"]],
+    "Robust Efficiency": [["Med", "Median"]],
+    "Smoothed Efficiency Rank": [["EMA"], ["CsRank"]],
+    "Trend Regression Adaptive": [["Rsquare", "Slope", "Resi", "TsLinReg"]],
+    "Logical Or Extreme Regimes": [["Or", "And"], ["Greater", "Less"]],
+    "Kurtosis Regime": [["Kurt"], ["IfElse"]],
+    "Amt Efficiency Rank Interaction": [["$amt"], ["CsRank"]],
 }
 
 _FORBIDDEN_SIGNATURES: dict[str, dict[str, Any]] = {
     "Standardized Returns/Amount": {
-        "keywords": ["CsZScore", "$returns", "$amt", "Std"],
+        "keywords": [["CsZScore"], ["$returns", "$amt"]],
         "typical_corr": 0.6,
         "reason": "Standardized return/amount variants cluster with rho > 0.6",
     },
     "VWAP Deviation variants": {
-        "keywords": ["$vwap", "Delta", "Sub", "$close"],
+        "keywords": [["$vwap"], ["Sub", "Delta", "Div"]],
         "typical_corr": 0.5,
         "reason": "VWAP deviation variants produce highly correlated factors (rho > 0.5)",
     },
     "Simple Delta Reversal": {
-        "keywords": ["Delta", "$close", "Neg", "Return"],
+        "keywords": [["Delta"], ["Neg"]],
         "typical_corr": 0.5,
         "reason": "Simple delta-based reversal factors are redundant (rho > 0.5)",
     },
     "WMA/EMA Smoothed Efficiency": {
-        "keywords": ["WMA", "EMA", "SMA"],
+        "keywords": [["WMA", "EMA", "SMA"]],
         "typical_corr": 0.9,
         "reason": "WMA/EMA smoothed efficiency variants nearly identical (rho > 0.9)",
     },
@@ -71,20 +82,19 @@ def _extract_features(formula: str) -> list[str]:
     return re.findall(r"\$[a-z]+", formula)
 
 
-def _matches_pattern(formula: str, signature_keywords: list[str]) -> bool:
-    """Check if a formula matches a pattern based on keyword presence."""
-    formula_upper = formula.upper()
-    ops = _extract_operators(formula)
-    feats = _extract_features(formula)
-    all_tokens = [o.upper() for o in ops] + [f.upper() for f in feats]
-    match_count = sum(
-        1 for kw in signature_keywords
-        if any(kw.upper() in token for token in all_tokens)
-        or kw.upper() in formula_upper
+def _matches_pattern(formula: str, anchor_groups: list[list[str]]) -> bool:
+    """True when the formula contains a token from every anchor group."""
+    ops = set(_extract_operators(formula))
+    feats = set(_extract_features(formula))
+
+    def present(token: str) -> bool:
+        if token.startswith("$"):
+            return token in feats
+        return any(op == token or op.startswith(token) for op in ops)
+
+    return bool(anchor_groups) and all(
+        any(present(token) for token in group) for group in anchor_groups
     )
-    # Require at least 2 keyword matches (or all if fewer than 2 keywords)
-    threshold = min(2, len(signature_keywords))
-    return match_count >= threshold
 
 
 def _classify_success_pattern(formula: str) -> str | None:
@@ -125,23 +135,21 @@ def _extract_success_patterns(
     admitted: list[dict],
     existing_patterns: list[SuccessPattern],
 ) -> list[SuccessPattern]:
-    """Extract new or reinforced success patterns from admitted factors."""
-    pattern_map: dict[str, SuccessPattern] = {
-        p.name: SuccessPattern(
-            name=p.name,
-            description=p.description,
-            template=p.template,
-            success_rate=p.success_rate,
-            example_factors=list(p.example_factors),
-            occurrence_count=p.occurrence_count,
-        )
-        for p in existing_patterns
-    }
+    """Extract this batch's success-pattern evidence from admitted factors.
+
+    Only the batch delta is returned (occurrence counts from this batch);
+    the evolution operator adds it to ``existing_patterns``. Seeding the map
+    with existing counts made every batch double the accumulated totals.
+    """
+    del existing_patterns  # accumulated state is merged by evolve_memory
+    pattern_map: dict[str, SuccessPattern] = {}
 
     for candidate in admitted:
         formula = candidate.get("formula", "")
         factor_id = candidate.get("factor_id", formula[:60])
-        ic = candidate.get("ic", 0.0)
+        ic = candidate.get("paper_ic", candidate.get("ic", 0.0)) or 0.0
+        icir = candidate.get("paper_icir", candidate.get("icir", 0.0)) or 0.0
+        max_corr = candidate.get("max_correlation", 0.0) or 0.0
 
         pattern_name = _classify_success_pattern(formula)
         if pattern_name is None:
@@ -166,7 +174,10 @@ def _extract_success_patterns(
         else:
             pattern_map[pattern_name] = SuccessPattern(
                 name=pattern_name,
-                description=f"Pattern derived from admitted factor with IC={ic:.4f}",
+                description=(
+                    f"Pattern derived from admitted factor with |IC|={ic:.4f}, "
+                    f"ICIR={icir:.2f}, max library rho={max_corr:.2f}"
+                ),
                 template=formula,
                 success_rate="Low",
                 example_factors=[factor_id],
@@ -180,39 +191,29 @@ def _extract_forbidden_directions(
     rejected: list[dict],
     existing_forbidden: list[ForbiddenDirection],
 ) -> list[ForbiddenDirection]:
-    """Extract new or reinforced forbidden directions from rejections."""
-    direction_map: dict[str, ForbiddenDirection] = {
-        f.name: ForbiddenDirection(
-            name=f.name,
-            description=f.description,
-            correlated_factors=list(f.correlated_factors),
-            typical_correlation=f.typical_correlation,
-            reason=f.reason,
-            occurrence_count=f.occurrence_count,
-        )
-        for f in existing_forbidden
-    }
+    """Extract this batch's redundancy evidence (delta only, see above)."""
+    del existing_forbidden  # accumulated state is merged by evolve_memory
+    direction_map: dict[str, ForbiddenDirection] = {}
 
     for candidate in rejected:
         formula = candidate.get("formula", "")
-        candidate.get("factor_id", formula[:60])
         rejection_reason = candidate.get("rejection_reason", "")
-        max_corr = candidate.get("max_correlation", 0.0)
-        correlated_with = candidate.get("correlated_with", "")
+        max_corr = candidate.get("max_correlation", 0.0) or 0.0
+        correlated_with = candidate.get("correlated_with", "") or candidate.get(
+            "duplicate_of", ""
+        )
 
-        # Only track correlation-based rejections
-        if max_corr < 0.4 and "correlation" not in rejection_reason.lower():
+        # P_fail holds regions rejected for redundancy (paper §3.3); weak or
+        # broken formulas are reported through batch feedback instead.
+        if not is_redundancy_failure(candidate):
             continue
 
         direction_name = _classify_forbidden_direction(formula)
         if direction_name is None:
-            # Detect generic high-correlation cluster
-            if max_corr >= 0.5:
-                ops = _extract_operators(formula)
-                feats = _extract_features(formula)
-                direction_name = f"HighCorr: {'+'.join(ops[:2])}({','.join(feats[:2])})"
-            else:
-                continue
+            # Generic high-correlation cluster named by its leading structure
+            ops = _extract_operators(formula)
+            feats = list(dict.fromkeys(_extract_features(formula)))
+            direction_name = f"HighCorr: {'+'.join(ops[:2])}({','.join(feats[:2])})"
 
         if direction_name in direction_map:
             d = direction_map[direction_name]
@@ -229,7 +230,7 @@ def _extract_forbidden_directions(
         else:
             direction_map[direction_name] = ForbiddenDirection(
                 name=direction_name,
-                description=f"Rejected due to: {rejection_reason}",
+                description=f"e.g. {formula[:120]} -- rejected: {rejection_reason}",
                 correlated_factors=[correlated_with] if correlated_with else [],
                 typical_correlation=max_corr,
                 reason=rejection_reason or f"High correlation (rho={max_corr:.2f})",
@@ -237,6 +238,10 @@ def _extract_forbidden_directions(
             )
 
     return list(direction_map.values())
+
+
+_MIN_TRAIT_ATTEMPTS = 5  # valid attempts needed on each side of a comparison
+_MIN_RATE_GAP = 0.2  # admission-rate difference worth reporting
 
 
 def _derive_insights(
@@ -249,10 +254,25 @@ def _derive_insights(
     if not admitted and not rejected:
         return insights
 
+    # Formulas that never ran carry no evidence about operators or features.
+    broken = [c for c in rejected if is_implementation_failure(c)]
+    rejected = [c for c in rejected if not is_implementation_failure(c)]
     total = len(admitted) + len(rejected)
     admission_rate = len(admitted) / total if total > 0 else 0.0
 
-    # Insight: overall batch success rate
+    if len(broken) >= 3:
+        broken_ops = Counter(
+            op for c in broken for op in set(_extract_operators(c.get("formula", "")))
+        )
+        if broken_ops:
+            op, count = broken_ops.most_common(1)[0]
+            insights.append(StrategicInsight(
+                insight=f"Formulas using '{op}' often fail to evaluate; check its arity and parameters",
+                evidence=f"Batch {batch_number}: {count}/{len(broken)} failed formulas used {op}",
+                batch_source=batch_number,
+            ))
+
+    # Insight: overall batch admission rate (a fact about this batch only)
     if total >= 5:
         if admission_rate > 0.3:
             insights.append(StrategicInsight(
@@ -262,58 +282,55 @@ def _derive_insights(
             ))
         elif admission_rate < 0.05:
             insights.append(StrategicInsight(
-                insight="Current direction is exhausted, need to pivot to new operator combinations",
+                insight="Admission rate fell below 5% in this batch",
                 evidence=f"Batch {batch_number}: only {len(admitted)}/{total} admitted ({admission_rate:.0%})",
                 batch_source=batch_number,
             ))
 
-    # Insight: operator frequency analysis
-    admitted_ops = Counter()
-    rejected_ops = Counter()
-    for c in admitted:
-        for op in _extract_operators(c.get("formula", "")):
-            admitted_ops[op] += 1
-    for c in rejected:
-        for op in _extract_operators(c.get("formula", "")):
-            rejected_ops[op] += 1
+    # Operator, feature and non-linearity insights compare admission *rates*
+    # among all valid attempts with and without the trait. Counting how many
+    # admitted factors carry a trait only describes what was generated: if
+    # nearly every candidate is non-linear, so is nearly every admission.
+    valid = [(c, True) for c in admitted] + [(c, False) for c in rejected]
 
-    # Find operators that appear disproportionately in admitted vs rejected
-    for op, count in admitted_ops.most_common(5):
-        rej_count = rejected_ops.get(op, 0)
-        if count >= 3 and (rej_count == 0 or count / max(rej_count, 1) > 2.0):
-            insights.append(StrategicInsight(
-                insight=f"Operator '{op}' is highly productive in current search",
-                evidence=f"Appeared in {count} admitted vs {rej_count} rejected factors",
-                batch_source=batch_number,
-            ))
+    def rate_gap(has_trait) -> tuple[int, int, int, int] | None:
+        with_trait = [ok for c, ok in valid if has_trait(c)]
+        without = [ok for c, ok in valid if not has_trait(c)]
+        if len(with_trait) < _MIN_TRAIT_ATTEMPTS or len(without) < _MIN_TRAIT_ATTEMPTS:
+            return None
+        return sum(with_trait), len(with_trait), sum(without), len(without)
 
-    # Insight: feature analysis
-    admitted_feats = Counter()
-    for c in admitted:
-        for feat in _extract_features(c.get("formula", "")):
-            admitted_feats[feat] += 1
-
-    if admitted_feats:
-        top_feat, top_count = admitted_feats.most_common(1)[0]
-        if top_count >= 3:
-            insights.append(StrategicInsight(
-                insight=f"Feature '{top_feat}' appears frequently in successful factors",
-                evidence=f"Present in {top_count}/{len(admitted)} admitted factors",
-                batch_source=batch_number,
-            ))
-
-    # Insight: non-linear vs linear
-    nonlinear_ops = {"IfElse", "Skew", "Kurt", "Square", "Pow", "Log", "Or", "And"}
-    admitted_nonlinear = sum(
-        1 for c in admitted
-        if any(op in nonlinear_ops for op in _extract_operators(c.get("formula", "")))
-    )
-    if len(admitted) >= 3 and admitted_nonlinear / len(admitted) > 0.6:
+    def rate_insight(label: str, has_trait) -> None:
+        gap = rate_gap(has_trait)
+        if gap is None:
+            return
+        hit_w, n_w, hit_wo, n_wo = gap
+        rate_w, rate_wo = hit_w / n_w, hit_wo / n_wo
+        if rate_w - rate_wo < _MIN_RATE_GAP:
+            return
         insights.append(StrategicInsight(
-            insight="Non-linear transformations outperform linear ones in current regime",
-            evidence=f"{admitted_nonlinear}/{len(admitted)} admitted factors use non-linear operators",
+            insight=f"{label} had a higher admission rate than the rest of this batch",
+            evidence=(
+                f"Batch {batch_number}: {hit_w}/{n_w} ({rate_w:.0%}) with vs "
+                f"{hit_wo}/{n_wo} ({rate_wo:.0%}) without; single batch, same panel"
+            ),
             batch_source=batch_number,
         ))
+
+    op_sets = {id(c): set(_extract_operators(c.get("formula", ""))) for c, _ in valid}
+    feat_sets = {id(c): set(_extract_features(c.get("formula", ""))) for c, _ in valid}
+    admitted_ops = Counter(op for c in admitted for op in op_sets[id(c)])
+    for op, _ in admitted_ops.most_common(5):
+        rate_insight(f"Formulas using '{op}'", lambda c, op=op: op in op_sets[id(c)])
+    admitted_feats = Counter(f for c in admitted for f in feat_sets[id(c)])
+    for feat, _ in admitted_feats.most_common(3):
+        rate_insight(f"Formulas using '{feat}'", lambda c, feat=feat: feat in feat_sets[id(c)])
+
+    nonlinear_ops = {"IfElse", "Skew", "Kurt", "Square", "Pow", "Log", "Or", "And"}
+    rate_insight(
+        "Formulas with non-linear operators (IfElse/Skew/Kurt/Square/Pow/Log/Or/And)",
+        lambda c: bool(op_sets[id(c)] & nonlinear_ops),
+    )
 
     return insights
 
@@ -356,6 +373,9 @@ def form_memory(
         (to be merged by the evolution operator).
     """
     admitted, rejected = _analyze_admissions(trajectory)
+    feedback = summarize_trajectory(
+        trajectory, batch_number, history=memory.state.feedback_history
+    )
 
     # Extract patterns
     new_success = _extract_success_patterns(admitted, memory.success_patterns)
@@ -395,6 +415,10 @@ def form_memory(
                 "admission_rate": len(admitted) / max(len(trajectory), 1),
             }
         ],
+        last_batch_feedback=feedback,
+        feedback_history=(
+            memory.state.feedback_history + [history_row(feedback)]
+        )[-FEEDBACK_HISTORY_LIMIT:],
     )
 
     return ExperienceMemory(
@@ -423,14 +447,15 @@ def _compute_domain_saturation(
     category_rejections: dict[str, int] = defaultdict(int)
 
     for candidate in admitted + rejected:
+        if is_implementation_failure(candidate):
+            continue
         formula = candidate.get("formula", "")
         category = _classify_success_pattern(formula) or "Other"
         category_attempts[category] += 1
 
     for candidate in rejected:
         formula = candidate.get("formula", "")
-        max_corr = candidate.get("max_correlation", 0.0)
-        if max_corr >= 0.4:
+        if is_redundancy_failure(candidate):
             category = _classify_success_pattern(formula) or "Other"
             category_rejections[category] += 1
 

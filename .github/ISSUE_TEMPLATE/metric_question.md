@@ -24,5 +24,5 @@ assignees: ""
 
 ## Context
 
-See `docs/reproducibility.md` before filing if the question is about
+See `docs/upstream/reproducibility.md` before filing if the question is about
 `abs(mean(IC_t))` versus `mean(abs(IC_t))`.

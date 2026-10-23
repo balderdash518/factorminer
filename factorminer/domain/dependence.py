@@ -78,9 +78,25 @@ class DependenceMetric(ABC):
 
 @dataclass(frozen=True)
 class SpearmanDependenceMetric(DependenceMetric):
-    """Mean absolute Spearman rank correlation across time."""
+    """Time-averaged cross-sectional Spearman correlation, paper eq. (3).
+
+    ``rho = mean_t Corr_rank(s_t(a), s_t(b))`` and redundancy uses ``|rho|``
+    (eqs. 4 and 10): the per-period correlations are averaged with their
+    signs, so a pair whose relation flips sign over time is not redundant.
+    ``absolute_per_period=True`` gives the stricter ``mean_t |Corr_t|``
+    variant (registered as ``mean_abs_spearman``).
+    """
 
     name: str = "spearman"
+    absolute_per_period: bool = False
+
+    def describe(self) -> dict[str, str]:
+        aggregation = "mean_of_abs" if self.absolute_per_period else "abs_of_mean"
+        return {
+            "name": self.name,
+            "family": "pairwise_time_averaged_dependence",
+            "aggregation": aggregation,
+        }
 
     def compute(self, signals_a: np.ndarray, signals_b: np.ndarray) -> float:
         if signals_a.shape != signals_b.shape:
@@ -112,14 +128,25 @@ class SpearmanDependenceMetric(DependenceMetric):
                 np.sum(ranked_a**2, axis=0) * np.sum(ranked_b**2, axis=0)
             )
             correlations = np.divide(
-                np.abs(numerator),
+                np.abs(numerator) if self.absolute_per_period else numerator,
                 denominator,
                 out=np.zeros_like(numerator),
                 where=denominator >= 1e-12,
             )
             correlation_sum += float(np.sum(correlations))
             period_count += int(correlations.size)
-        return correlation_sum / period_count if period_count else 0.0
+        return abs(correlation_sum / period_count) if period_count else 0.0
+
+
+@dataclass(frozen=True)
+class MeanAbsSpearmanDependenceMetric(SpearmanDependenceMetric):
+    """Mean of per-period absolute Spearman correlations (pre-fix default).
+
+    Stricter than eq. (3): sign-flipping relations count as redundant.
+    """
+
+    name: str = "mean_abs_spearman"
+    absolute_per_period: bool = True
 
 
 @dataclass(frozen=True)
@@ -156,15 +183,18 @@ def build_dependence_metric(name: str | None) -> DependenceMetric:
     """Build one supported dependence metric from config/runtime names."""
 
     metric_name = str(name or "spearman").strip().lower()
-    if metric_name in {"spearman", "rank_correlation"}:
+    if metric_name in {"spearman", "rank_correlation", "paper_spearman"}:
         return SpearmanDependenceMetric()
+    if metric_name in {"mean_abs_spearman"}:
+        return MeanAbsSpearmanDependenceMetric()
     if metric_name in {"pearson", "linear_correlation"}:
         return PearsonDependenceMetric()
     if metric_name in {"distance_correlation", "distance", "dcor"}:
         return DistanceCorrelationMetric()
     raise ValueError(
         "Unsupported redundancy/dependence metric "
-        f"'{name}'. Expected one of: spearman, pearson, distance_correlation"
+        f"'{name}'. Expected one of: spearman, mean_abs_spearman, pearson, "
+        "distance_correlation"
     )
 
 

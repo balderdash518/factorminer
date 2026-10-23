@@ -76,7 +76,7 @@ class MiningSettings:
 
     @property
     def icir_threshold(self) -> float:
-        return float(self._value("mining", "icir_threshold", 0.5))
+        return float(self._value("mining", "icir_threshold", 0.0))
 
     @property
     def correlation_threshold(self) -> float:

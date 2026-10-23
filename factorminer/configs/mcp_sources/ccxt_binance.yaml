@@ -38,7 +38,7 @@ constant_columns:
   asset_id: "BTC/USDT"
 # Public OHLCV has no separate quote-asset turnover field; approximate dollar
 # volume as close * volume (documented approximation, same spirit as the
-# recomputed `vwap` in docs/reproducibility.md).
+# recomputed `vwap` in docs/upstream/reproducibility.md).
 derive_amount_from_close_volume: true
 # ccxt timestamps are epoch milliseconds.
 datetime_unit: ms

@@ -211,7 +211,7 @@ def _build_mining_config(
     cfg.mining.batch_size = batch_size
     cfg.mining.max_iterations = max_iterations
     cfg.mining.ic_threshold = ic_threshold
-    cfg.mining.icir_threshold = 0.5
+    cfg.mining.icir_threshold = 0.0  # paper §4.3 ablation gates on |IC| and theta only
     cfg.mining.correlation_threshold = correlation_threshold
     cfg.mining.replacement_ic_min = max(ic_threshold * 2.5, ic_threshold + 0.05)
     cfg.mining.replacement_ic_ratio = 1.3

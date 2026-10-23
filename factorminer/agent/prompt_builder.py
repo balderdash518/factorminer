@@ -132,12 +132,12 @@ Your goal is to generate novel, predictive factor expressions using a tree-struc
 1. Every expression is a nested function call: Operator(args...)
 2. Leaf nodes are raw features ($close, $volume, etc.) or numeric constants.
 3. Operators are called by name with expression arguments first, then numeric parameters:
-   - Mean($close, 20) = 20-day rolling mean of $close
-   - Corr($close, $volume, 10) = 10-day rolling correlation of close and volume
+   - Mean($close, 20) = rolling mean of $close over the last 20 bars
+   - Corr($close, $volume, 10) = rolling correlation of close and volume over 10 bars
    - IfElse(Greater($returns, 0), $volume, Neg($volume)) = conditional
 4. No infix operators; use Add(x,y) instead of x+y, Sub(x,y) instead of x-y, etc.
 5. Parameters like window sizes are trailing numeric arguments after expression children.
-6. Valid window sizes are integers; check each operator's parameter ranges above.
+6. Valid window sizes are integers counted in bars of the data frequency; check each operator's parameter ranges above.
 7. Cross-sectional operators (CsRank, CsZScore, CsDemean, CsScale, CsNeutralize) operate across all assets at each time step -- they are crucial for making factors comparable.
 
 ## EXAMPLES OF WELL-FORMED FACTORS
@@ -157,7 +157,7 @@ Your goal is to generate novel, predictive factor expressions using a tree-struc
   Position within 20-day price range, ranked.
 
 ## KEY PRINCIPLES FOR HIGH-QUALITY FACTORS
-- Always wrap the outermost expression with a cross-sectional operator (CsRank, CsZScore) for comparability.
+- Evaluation uses cross-sectional rank IC, so an outer CsRank/CsZScore is optional; use one when it changes the meaning (e.g. before combining terms of different scale).
 - Combine DIFFERENT operator types for novelty (e.g., time-series + cross-sectional + arithmetic).
 - Use diverse window sizes; avoid always defaulting to 10.
 - Explore uncommon feature combinations ($amt, $vwap, and any registered alt-data leaves are underused).
@@ -214,6 +214,113 @@ def normalize_factor_references(entries: list[Any] | None) -> list[str]:
     return normalized
 
 
+_LIBRARY_MEMBER_LIMIT = 40
+
+
+def _library_sections(library_state: dict[str, Any]) -> list[str]:
+    """Render library size, composition and members for the user prompt."""
+    lib_size = library_state.get("library_size", library_state.get("size", 0))
+    target = library_state.get("target_size", 110)
+    sections = [
+        f"\n## CURRENT LIBRARY STATUS\n"
+        f"Library size: {lib_size} / {target} factors."
+    ]
+    threshold = library_state.get("correlation_threshold")
+    if threshold is not None:
+        sections.append(
+            f"A candidate is admitted only if |IC| >= {library_state.get('ic_threshold', '?')} "
+            f"and its correlation with every library factor is below {threshold}."
+        )
+
+    categories = library_state.get("categories") or {}
+    if categories:
+        ordered = sorted(categories.items(), key=lambda item: (-item[1], item[0]))
+        sections.append(
+            "Composition by category: "
+            + ", ".join(f"{name}={count}" for name, count in ordered)
+        )
+
+    members = library_state.get("members") or []
+    if members:
+        shown = members[-_LIBRARY_MEMBER_LIMIT:]
+        header = "Library factors (new candidates must be uncorrelated with these)"
+        if len(members) > len(shown):
+            header += f", most recent {len(shown)} of {len(members)}"
+        lines = []
+        for member in shown:
+            ic = member.get("ic_paper_mean")
+            ic_text = f"  |IC| {float(ic):.4f}" if ic is not None else ""
+            lines.append(f"  #{member.get('id', '?')} {member.get('formula', '')}{ic_text}")
+        sections.append(header + ":\n" + "\n".join(lines))
+    else:
+        recent = normalize_factor_references(library_state.get("recent_admissions", []))
+        if recent:
+            sections.append(
+                "Recently admitted factors:\n"
+                + "\n".join(f"  - {f}" for f in recent[-10:])
+            )
+
+    saturation = library_state.get("domain_saturation", {})
+    if saturation:
+        sat_lines = [f"  {domain}: {pct:.0%} saturated" for domain, pct in saturation.items()]
+        sections.append("Domain saturation:\n" + "\n".join(sat_lines))
+    return sections
+
+
+def _describe_memory_entry(entry: Any) -> str:
+    """Render one memory entry (string or pattern dict) as a prompt line."""
+    if not isinstance(entry, dict):
+        return str(entry)
+    name = str(entry.get("name") or entry.get("insight") or "").strip()
+    details = []
+    for key in ("description", "reason", "evidence"):
+        value = str(entry.get(key, "") or "").strip()
+        if value and value != name:
+            details.append(value)
+    template = str(entry.get("template", "") or "").strip()
+    if template:
+        details.append(f"template: {template}")
+    examples = entry.get("example_factors") or entry.get("correlated_factors") or []
+    if examples:
+        details.append("e.g. " + ", ".join(str(e) for e in examples[:3]))
+    return name + (f" -- {'; '.join(details)}" if details else "")
+
+
+def _structured_memory_sections(memory_signal: dict[str, Any]) -> list[str]:
+    """Fallback rendering when the memory signal carries no ``prompt_text``."""
+    sections: list[str] = []
+    rec_dirs = memory_signal.get("recommended_directions", [])
+    if rec_dirs:
+        sections.append(
+            "\n## RECOMMENDED DIRECTIONS (focus on these successful patterns)\n"
+            + "\n".join(f"  * {_describe_memory_entry(d)}" for d in rec_dirs)
+        )
+    forbidden = memory_signal.get("forbidden_directions", [])
+    if forbidden:
+        sections.append(
+            "\n## FORBIDDEN DIRECTIONS (AVOID these -- they produce correlated/weak factors)\n"
+            + "\n".join(f"  X {_describe_memory_entry(d)}" for d in forbidden)
+        )
+    insights = memory_signal.get("strategic_insights") or memory_signal.get("insights") or []
+    if insights:
+        sections.append(
+            "\n## STRATEGIC INSIGHTS\n"
+            + "\n".join(f"  Note: {_describe_memory_entry(ins)}" for ins in insights)
+        )
+    rejections = memory_signal.get("recent_rejections", [])
+    if rejections:
+        rej_lines = []
+        for rej in rejections[-10:]:
+            name = rej.get("name") or rej.get("formula") or "unknown"
+            reason = rej.get("reason", "unknown")
+            rej_lines.append(f"  - {name}: rejected because {reason}")
+        sections.append(
+            "\n## RECENT REJECTIONS (learn from these failures)\n"
+            + "\n".join(rej_lines)
+        )
+    return sections
+
+
 class PromptBuilder:
     """Constructs system and user prompts for factor generation.
 
@@ -254,15 +361,19 @@ class PromptBuilder:
         ----------
         memory_signal : dict
             Keys:
-            - ``"recommended_directions"`` : list[str] -- patterns to explore
-            - ``"forbidden_directions"`` : list[str] -- patterns to avoid
-            - ``"strategic_insights"`` : list[str] -- high-level lessons
+            - ``"prompt_text"`` : str -- rendered memory (P_succ, P_fail, I and
+              last-batch feedback); preferred when present
+            - ``"recommended_directions"`` / ``"forbidden_directions"`` :
+              list[str | dict] -- used only without ``prompt_text``
+            - ``"insights"`` (or ``"strategic_insights"``) : list[str | dict]
             - ``"recent_rejections"`` : list[dict] -- recent rejection reasons
         library_state : dict
-            Keys:
-            - ``"size"`` : int -- current library size
+            Keys (``FactorLibrary.get_state_summary`` plus ``target_size``):
+            - ``"library_size"`` (or legacy ``"size"``) : int
             - ``"target_size"`` : int -- target library size
-            - ``"recent_admissions"`` : list[str] -- recently admitted factor names
+            - ``"categories"`` : dict[str, int] -- factors per category
+            - ``"members"`` : list[dict] -- admitted factors with IC
+            - ``"recent_admissions"`` : list[str | dict]
             - ``"domain_saturation"`` : dict[str, float] -- per-domain saturation
         batch_size : int
             Number of candidates to generate this iteration.
@@ -279,60 +390,23 @@ class PromptBuilder:
             f"Generate exactly {batch_size} novel, diverse alpha factor candidates."
         )
 
-        # --- Library status ---
-        lib_size = library_state.get("size", 0)
-        target = library_state.get("target_size", 110)
-        sections.append(
-            f"\n## CURRENT LIBRARY STATUS\n"
-            f"Library size: {lib_size} / {target} factors."
-        )
+        # --- Library status (global library perspective, paper §3.4) ---
+        sections.extend(_library_sections(library_state))
 
-        recent = normalize_factor_references(
-            library_state.get("recent_admissions", [])
-        )
-        if recent:
-            sections.append(
-                "Recently admitted factors:\n"
-                + "\n".join(f"  - {f}" for f in recent[-10:])
-            )
+        # --- Experience memory: rendered once ---
+        # Memory policies return both structured lists and ``prompt_text``,
+        # which already renders those lists in natural language. Rendering
+        # both duplicated every entry and printed raw dicts, so the lists are
+        # only used when no rendered text is supplied.
+        memory_text = str(memory_signal.get("prompt_text", "") or "").strip()
+        if memory_text:
+            sections.append("\n## EXPERIENCE MEMORY\n" + memory_text)
+        else:
+            sections.extend(_structured_memory_sections(memory_signal))
 
-        saturation = library_state.get("domain_saturation", {})
-        if saturation:
-            sat_lines = [f"  {domain}: {pct:.0%} saturated" for domain, pct in saturation.items()]
-            sections.append(
-                "Domain saturation:\n" + "\n".join(sat_lines)
-            )
-
-        # --- Memory signal: recommended directions ---
-        rec_dirs = memory_signal.get("recommended_directions", [])
-        if rec_dirs:
-            sections.append(
-                "\n## RECOMMENDED DIRECTIONS (focus on these successful patterns)\n"
-                + "\n".join(f"  * {d}" for d in rec_dirs)
-            )
-
-        # --- Memory signal: forbidden directions ---
-        forbidden = memory_signal.get("forbidden_directions", [])
-        if forbidden:
-            sections.append(
-                "\n## FORBIDDEN DIRECTIONS (AVOID these -- they produce correlated/weak factors)\n"
-                + "\n".join(f"  X {d}" for d in forbidden)
-            )
-
-        # --- Memory signal: strategic insights ---
-        insights = memory_signal.get("strategic_insights", [])
-        if insights:
-            sections.append(
-                "\n## STRATEGIC INSIGHTS\n"
-                + "\n".join(f"  Note: {ins}" for ins in insights)
-            )
-
-        helix_prompt_text = memory_signal.get("prompt_text", "").strip()
-        if helix_prompt_text:
-            sections.append(
-                "\n## HELIX RETRIEVAL SUMMARY\n"
-                f"{helix_prompt_text}"
-            )
+        research_text = str(memory_signal.get("research_prompt_text", "") or "").strip()
+        if research_text:
+            sections.append("\n## RESEARCH CONTEXT\n" + research_text)
 
         complementary_patterns = memory_signal.get("complementary_patterns", [])
         if complementary_patterns:
@@ -362,19 +436,6 @@ class PromptBuilder:
                 + "\n".join(
                     f"  - Underused but promising: {gap}" for gap in semantic_gaps
                 )
-            )
-
-        # --- Recent rejection reasons ---
-        rejections = memory_signal.get("recent_rejections", [])
-        if rejections:
-            rej_lines = []
-            for rej in rejections[-10:]:
-                name = rej.get("name", "unknown")
-                reason = rej.get("reason", "unknown")
-                rej_lines.append(f"  - {name}: rejected because {reason}")
-            sections.append(
-                "\n## RECENT REJECTIONS (learn from these failures)\n"
-                + "\n".join(rej_lines)
             )
 
         # --- Orthogonality directive ---

@@ -678,6 +678,7 @@ def _single_factor_library():
 
 def test_table1_runtime_methods_instantiate_live_loops(monkeypatch, tmp_path):
     cfg = load_config()
+    cfg.mining.train_split_only = False  # the 6-bar stub cannot hold a purged train split
     calls = []
 
     monkeypatch.setattr(

@@ -18,8 +18,9 @@ def _reference(a: np.ndarray, b: np.ndarray) -> float:
         x -= x.mean()
         y -= y.mean()
         denominator = np.sqrt(np.sum(x * x) * np.sum(y * y))
-        scores.append(abs(np.sum(x * y) / denominator) if denominator >= 1e-12 else 0.0)
-    return float(np.mean(scores)) if scores else 0.0
+        scores.append(np.sum(x * y) / denominator if denominator >= 1e-12 else 0.0)
+    # Paper eq. (3): average the signed per-period correlations, then |.|.
+    return float(abs(np.mean(scores))) if scores else 0.0
 
 
 def test_spearman_matches_joint_mask_reference_across_chunks():

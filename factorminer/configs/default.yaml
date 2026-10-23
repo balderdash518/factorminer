@@ -33,8 +33,9 @@ mining:
   # Minimum absolute IC for a factor to pass Stage 1 screening (paper: 0.04)
   ic_threshold: 0.04
 
-  # Minimum ICIR for factor quality filtering
-  icir_threshold: 0.5
+  # Optional minimum ICIR gate. The paper's admission rule (eq. 10) has none,
+  # so 0 disables it; raise it to trade library size for stability.
+  icir_threshold: 0.0
 
   # Maximum pairwise |rho| allowed between library factors (paper: 0.5)
   correlation_threshold: 0.5
@@ -44,6 +45,10 @@ mining:
 
   # Replacement IC ratio: candidate IC must be >= ratio * existing IC
   replacement_ic_ratio: 1.3
+
+  # Mine only on data.train_period (target-purged). The test period is never
+  # seen by admission, replacement, or memory (paper: 2024 train, 2025 test).
+  train_split_only: true
 
 # ---------------------------------------------------------------------------
 # Evaluation backend
@@ -109,6 +114,13 @@ data:
 
   # Out-of-sample test period [start, end] in ISO format
   test_period: ["2025-01-01", "2025-12-31"]
+
+  # Raw-field preprocessing before formulas are evaluated. The paper applies
+  # its DSL to raw price/volume fields and standardizes only realized factor
+  # signals, so both are off: Div($close, $vwap) keeps its price meaning.
+  # Missing-value filling and halt masking always run.
+  standardise_raw_features: false
+  winsorise_raw_features: false
 
   # Named target definitions. The default target drives benchmark-facing metrics;
   # research mode can score all configured targets jointly.
@@ -210,6 +222,17 @@ memory:
 
   # Rolling window used when policy == "regime_aware"
   regime_lookback_window: 60
+
+  # Initial memory when no checkpoint is resumed. "empty" starts from M = {}
+  # so every pattern is learned from this run's trajectories. "paper_defaults"
+  # preloads the patterns the paper reports after mining (Tables 6/10); use it
+  # to deploy that experience, not to reproduce its discovery process.
+  seed: "empty"
+
+  # After each batch, ask the LLM to interpret the evaluator's feedback and
+  # propose hypotheses for the next batch (one extra call per iteration).
+  # Not part of the paper protocol; numbers in the prompt remain evaluator-computed.
+  llm_reflection: false
 
 # ---------------------------------------------------------------------------
 # Benchmarking and reporting
@@ -387,3 +410,20 @@ phase2:
     enable_canonicalization: true
     forgetting_lambda: 0.95
     forgetting_demotion_threshold: 20
+
+# ---------------------------------------------------------------------------
+# Observability: per-iteration traces of prompts, LLM outputs, evaluations
+# and memory updates (factorminer.utils.tracing)
+# ---------------------------------------------------------------------------
+observability:
+  # "auto" sends traces to Langfuse when LANGFUSE_PUBLIC_KEY and
+  # LANGFUSE_SECRET_KEY (and optionally LANGFUSE_BASE_URL) are set and the
+  # langfuse package is installed (pip install 'factorminer[observability]').
+  # "on" warns when they are missing; "off" disables Langfuse.
+  langfuse: "auto"
+  # Always-on offline copy: <output_dir>/trace_log.jsonl (+ system_prompts/).
+  local_log: true
+  # Keeps test runs out of production dashboards in Langfuse.
+  environment: "development"
+  release: ""
+  sample_rate: 1.0

@@ -72,7 +72,7 @@ and `build-futures`. Normal mining does not initiate unattended data acquisition
   and recorded as an approximation.
 
 Connector configuration and examples are in the
-[integration guide](../integrations/factor-researcher/README.md).
+[integration guide](../../integrations/factor-researcher/README.md).
 
 ## MCP transports
 

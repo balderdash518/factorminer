@@ -56,6 +56,11 @@ def _create_llm_provider(cfg, mock: bool):
     base_url = getattr(llm_cfg, "base_url", None) or raw_llm.get("base_url")
     if base_url:
         llm_config["base_url"] = base_url
+    # Engine-specific request fields for OpenAI-compatible servers (local YAML).
+    if isinstance(raw_llm.get("extra_body"), dict):
+        llm_config["extra_body"] = raw_llm["extra_body"]
+    if raw_llm.get("context_window"):
+        llm_config["context_window"] = int(raw_llm["context_window"])
 
     # Cascade: prefer nested raw llm.cascade block; fall back to flat fields.
     cascade_raw = raw_llm.get("cascade") if isinstance(raw_llm.get("cascade"), dict) else {}

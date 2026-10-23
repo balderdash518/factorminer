@@ -114,5 +114,6 @@ def _relaxed_config(config):
     config.mining.ic_threshold = 0.0
     config.mining.icir_threshold = -1.0
     config.mining.correlation_threshold = 1.1
+    config.mining.train_split_only = False  # 3 train bars cannot survive target purging
     config.validate = lambda: None
     return config

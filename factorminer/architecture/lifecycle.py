@@ -132,6 +132,8 @@ class FactorLifecycleStore:
                         "ic_mean": float(getattr(result, "ic_mean", 0.0)),
                         "icir": float(getattr(result, "icir", 0.0)),
                         "replaced": getattr(result, "replaced", None),
+                        "max_correlation": float(getattr(result, "max_correlation", 0.0)),
+                        "correlated_with": str(getattr(result, "correlated_with", "")),
                     },
                 )
             elif getattr(result, "stage_passed", 0) >= 2:
@@ -141,7 +143,12 @@ class FactorLifecycleStore:
                     str(result.formula),
                     stage="correlation_rejected",
                     status="failed",
-                    details={"reason": getattr(result, "rejection_reason", "")},
+                    details={
+                        "reason": getattr(result, "rejection_reason", ""),
+                        "outcome": str(getattr(result, "outcome", "")),
+                        "max_correlation": float(getattr(result, "max_correlation", 0.0)),
+                        "correlated_with": str(getattr(result, "correlated_with", "")),
+                    },
                 )
 
     def record_memory_distillation(
@@ -188,6 +195,9 @@ class FactorLifecycleStore:
                 record["icir"] = event.details["icir"]
             if "replaced" in event.details:
                 record["replaced"] = event.details["replaced"]
+            for key in ("max_correlation", "correlated_with", "outcome"):
+                if key in event.details:
+                    record[key] = event.details[key]
             if event.stage in {"admitted", "replaced"} and event.status == "passed":
                 record["admitted"] = True
             if event.stage == "correlation_rejected":

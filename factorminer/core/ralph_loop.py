@@ -70,6 +70,7 @@ from factorminer.evaluation.dependence_index import indexed_dependence_metric
 from factorminer.memory.defaults import create_default_memory
 from factorminer.memory.memory_store import ExperienceMemory
 from factorminer.utils.logging import MiningSessionLogger
+from factorminer.utils.tracing import MiningTracer, activate, tracer_from_config
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +117,9 @@ class RalphLoop:
         llm_provider : LLMProvider, optional
             LLM provider for factor generation.  Defaults to MockProvider.
         memory : ExperienceMemory, optional
-            Pre-populated experience memory.  Defaults to empty memory.
+            Pre-populated experience memory. Defaults to ``memory.seed``:
+            empty memory, or the paper's reported patterns for
+            ``"paper_defaults"``.
         library : FactorLibrary, optional
             Pre-populated factor library.  Defaults to empty library.
         checkpoint_interval : int
@@ -153,7 +156,7 @@ class RalphLoop:
             target_panels=dict(self.settings.target_panels or {}),
             target_horizons=dict(self.settings.target_horizons or {}),
         )
-        self.memory = memory if memory is not None else create_default_memory()
+        self.memory = memory if memory is not None else self._initial_memory(config)
         self.memory_policy = build_memory_policy(config, self.protocol, returns=returns,
                                                  output_dir=self.settings.output_dir)
         self.prompt_context_builder = PromptContextBuilder(
@@ -329,74 +332,75 @@ class RalphLoop:
             self.budget = BudgetTracker()
         self.budget.wall_start = time.time()
 
-        try:
-            while self.library.size < target_size and (max_iterations == 0 or self.iteration < max_iterations):
-                self.iteration += 1
-                stats = self._run_iteration(batch_size)
+        with activate(self._build_tracer(output_dir)):
+            try:
+                while self.library.size < target_size and (max_iterations == 0 or self.iteration < max_iterations):
+                    self.iteration += 1
+                    stats = self._run_iteration(batch_size)
 
-                # Record in session
-                self._session.record_iteration(stats)
+                    # Record in session
+                    self._session.record_iteration(stats)
 
-                # Callback
-                if callback:
-                    callback(self.iteration, stats)
+                    # Callback
+                    if callback:
+                        callback(self.iteration, stats)
 
-                logger.info(
-                    "Iteration %d: Library size=%d, Admitted=%d, Yield=%.1f%%, AvgCorr=%.3f",
-                    self.iteration,
-                    stats["library_size"],
-                    stats["admitted"],
-                    stats["yield_rate"] * 100,
-                    stats.get("avg_correlation", 0),
+                    logger.info(
+                        "Iteration %d: Library size=%d, Admitted=%d, Yield=%.1f%%, AvgCorr=%.3f",
+                        self.iteration,
+                        stats["library_size"],
+                        stats["admitted"],
+                        stats["yield_rate"] * 100,
+                        stats.get("avg_correlation", 0),
+                    )
+
+                    # Periodic checkpoint
+                    if self.checkpoint_interval > 0 and self.iteration % self.checkpoint_interval == 0:
+                        self._checkpoint()
+                    if stats.get("research_stop", False):
+                        logger.info("Research planner stopped: %s", stats["research_action"]["rationale"])
+                        break
+
+            except KeyboardInterrupt:
+                logger.warning("Mining interrupted by user at iteration %d", self.iteration)
+                if self._session:
+                    self._session.status = "interrupted"
+                # Save checkpoint on interrupt so session can be resumed
+                self._checkpoint()
+            except Exception:
+                if self._session:
+                    self._session.status = "interrupted"
+                self._checkpoint()
+                raise
+            finally:
+                elapsed = time.time() - loop_start
+                zero_admission_warning = self._loop_services.zero_admission_guidance(
+                    target_size=target_size,
+                    max_iterations=max_iterations,
                 )
-
-                # Periodic checkpoint
-                if self.checkpoint_interval > 0 and self.iteration % self.checkpoint_interval == 0:
-                    self._checkpoint()
-                if stats.get("research_stop", False):
-                    logger.info("Research planner stopped: %s", stats["research_action"]["rationale"])
-                    break
-
-        except KeyboardInterrupt:
-            logger.warning("Mining interrupted by user at iteration %d", self.iteration)
-            if self._session:
-                self._session.status = "interrupted"
-            # Save checkpoint on interrupt so session can be resumed
-            self._checkpoint()
-        except Exception:
-            if self._session:
-                self._session.status = "interrupted"
-            self._checkpoint()
-            raise
-        finally:
-            elapsed = time.time() - loop_start
-            zero_admission_warning = self._loop_services.zero_admission_guidance(
-                target_size=target_size,
-                max_iterations=max_iterations,
-            )
-            if zero_admission_warning:
-                logger.warning(zero_admission_warning)
-            if self._session_logger:
-                self._session_logger.log_session_end(self.library.size, elapsed)
-            self._refresh_run_manifest(
-                output_dir=output_dir,
-                artifact_paths={
-                    "output_dir": output_dir,
-                    "checkpoint_dir": str(Path(output_dir) / "checkpoint"),
-                    "library": str(Path(output_dir) / "factor_library.json"),
-                    "session": str(Path(output_dir) / "session.json"),
-                    "run_manifest": str(Path(output_dir) / "run_manifest.json"),
-                    "session_log": str(Path(output_dir) / "session_log.json"),
-                    "trial_ledger": str(Path(output_dir) / "global_trial_ledger.jsonl"),
-                },
-            )
-            self._persist_run_manifest(Path(output_dir) / "run_manifest.json")
-            if self._session:
-                if self._session.status != "interrupted":
-                    self._session.finalize()
-                self._session.save()
-            # Always persist the final state, including explicit run boundaries.
-            self._checkpoint()
+                if zero_admission_warning:
+                    logger.warning(zero_admission_warning)
+                if self._session_logger:
+                    self._session_logger.log_session_end(self.library.size, elapsed)
+                self._refresh_run_manifest(
+                    output_dir=output_dir,
+                    artifact_paths={
+                        "output_dir": output_dir,
+                        "checkpoint_dir": str(Path(output_dir) / "checkpoint"),
+                        "library": str(Path(output_dir) / "factor_library.json"),
+                        "session": str(Path(output_dir) / "session.json"),
+                        "run_manifest": str(Path(output_dir) / "run_manifest.json"),
+                        "session_log": str(Path(output_dir) / "session_log.json"),
+                        "trial_ledger": str(Path(output_dir) / "global_trial_ledger.jsonl"),
+                    },
+                )
+                self._persist_run_manifest(Path(output_dir) / "run_manifest.json")
+                if self._session:
+                    if self._session.status != "interrupted":
+                        self._session.finalize()
+                    self._session.save()
+                # Always persist the final state, including explicit run boundaries.
+                self._checkpoint()
 
         # Final export
         lib_path = self.reporter.export_library(self.library)
@@ -464,7 +468,28 @@ class RalphLoop:
         trajectory = self._build_trajectory(payload.results)
         formed = self.memory_policy.form(self.memory, trajectory, iteration=self.iteration)
         self.memory = self.memory_policy.evolve(self.memory, formed)
+        self._reflect_on_batch()
         self.lifecycle_store.record_memory_distillation(self.iteration, trajectory)
+
+    def _reflect_on_batch(self) -> None:
+        """Optional LLM interpretation of this batch's feedback (memory.llm_reflection)."""
+        memory_cfg = getattr(self.config, "memory", None)
+        enabled = getattr(memory_cfg, "llm_reflection", getattr(self.config, "memory_llm_reflection", False))
+        feedback = self.memory.state.last_batch_feedback
+        # Policies that skip formation (no-memory ablation) leave no fresh feedback.
+        if not enabled or not feedback or feedback.get("iteration") != self.iteration:
+            return
+        from factorminer.agent.reflection import reflect_on_batch
+        from factorminer.memory.feedback import render_batch_feedback
+
+        reflection = reflect_on_batch(
+            self.generator.llm_provider,
+            render_batch_feedback(feedback, self.memory.state.feedback_history[:-1]),
+            library_formulas=[factor.formula for factor in self.library.list_factors()],
+        )
+        self.budget.record_llm_call()
+        if reflection:
+            feedback["reflection"] = reflection
 
     # ------------------------------------------------------------------
     # Library update
@@ -558,29 +583,16 @@ class RalphLoop:
     def _build_trajectory(self, results: list[EvaluationResult]) -> list[dict[str, Any]]:
         """Build mining trajectory tau for memory formation.
 
-        Converts evaluation results into the dict format expected by
-        ``form_memory``. Always merges parent_formula lineage so
-        ``EditAwareMemoryPolicy`` can extract edit-motif edges.
+        Paper §3.4: for each evaluated candidate, tau records the formula,
+        quality statistics, redundancy diagnostics (max |rho| and the
+        conflicting library factor) and the outcome, including replacement.
+        Entries are built from the evaluation results themselves; the
+        lifecycle log only serves as a fallback when no results are given.
+        Always merges parent_formula lineage so ``EditAwareMemoryPolicy`` can
+        extract edit-motif edges.
         """
-        by_key = {
-            (r.factor_name, r.formula): r
-            for r in results
-        }
-        lifecycle_trajectory = self.lifecycle_store.build_trajectory(self.iteration)
-        if lifecycle_trajectory:
-            trajectory: list[dict[str, Any]] = []
-            for entry in lifecycle_trajectory:
-                merged = dict(entry)
-                key = (str(entry.get("factor_id", "")), str(entry.get("formula", "")))
-                result = by_key.get(key)
-                if result is not None:
-                    merged.update(self._lineage_fields(result))
-                    if "paper_ic" not in merged:
-                        merged["paper_ic"] = result.ic_paper_mean
-                    if "ic_paper_mean" not in merged:
-                        merged["ic_paper_mean"] = result.ic_paper_mean
-                trajectory.append(merged)
-            return trajectory
+        if not results:
+            return self.lifecycle_store.build_trajectory(self.iteration)
 
         trajectory = []
         for r in results:
@@ -595,8 +607,14 @@ class RalphLoop:
                 "paper_icir": r.ic_paper_icir,
                 "max_correlation": r.max_correlation,
                 "correlated_with": r.correlated_with,
+                "conflict_count": r.conflict_count,
                 "admitted": r.admitted,
+                "replaced": r.replaced,
+                "outcome": r.outcome,
+                "stage_passed": r.stage_passed,
                 "rejection_reason": r.rejection_reason,
+                "replacement_note": r.replacement_note,
+                "duplicate_of": r.duplicate_of,
             }
             entry.update(self._lineage_fields(r))
             trajectory.append(entry)
@@ -924,6 +942,41 @@ class RalphLoop:
                 for attr in attrs
                 if getattr(self.config, attr, None) is not None
             }
+
+    def _build_tracer(self, output_dir: str) -> MiningTracer:
+        """Tracer for this run: one Langfuse session per mining session."""
+        provider = self.generator.llm_provider
+        session_id = self._session.session_id if self._session else "unknown"
+        tags = [
+            f"loop:{self._loop_type()}",
+            f"mode:{self.protocol.benchmark_mode}",
+            f"memory:{self.memory_policy.schema().get('policy', 'unknown')}",
+            f"provider:{provider.provider_name}",
+        ]
+        if isinstance(provider, MockProvider):
+            tags.append("mock")
+        return tracer_from_config(
+            self.config,
+            session_id=f"factorminer-{session_id}-{self.trial_campaign_id[:8]}",
+            output_dir=output_dir,
+            tags=tags,
+            metadata={
+                "campaign_id": self.trial_campaign_id,
+                "dataset_id": self.trial_dataset_id,
+                "ic_threshold": self.settings.ic_threshold,
+                "correlation_threshold": self.settings.correlation_threshold,
+                "redundancy_metric": self.settings.redundancy_metric,
+                "batch_size": self.settings.batch_size,
+            },
+        )
+
+    @staticmethod
+    def _initial_memory(config: Any) -> ExperienceMemory:
+        memory_cfg = getattr(config, "memory", None)
+        seed = str(getattr(memory_cfg, "seed", getattr(config, "memory_seed", "empty")))
+        if seed == "paper_defaults":
+            return create_default_memory()
+        return ExperienceMemory()
 
     def _loop_type(self) -> str:
         """Label the loop for provenance and manifests."""

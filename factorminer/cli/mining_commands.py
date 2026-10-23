@@ -143,7 +143,7 @@ def mine(
 
     try:
         dataset = _app._load_runtime_dataset_for_analysis(cfg, data_path, mock)
-        if cfg.research.planner.enabled:
+        if cfg.research.planner.enabled or getattr(cfg.mining, "train_split_only", True):
             from factorminer.application.research_actions import discovery_dataset
             dataset = discovery_dataset(dataset)
     except Exception as exc:
@@ -266,7 +266,7 @@ def helix(
         click.echo(f"  Resuming from: {resume}")
     try:
         dataset = _app._load_runtime_dataset_for_analysis(cfg, data_path, mock)
-        if cfg.research.planner.enabled:
+        if cfg.research.planner.enabled or getattr(cfg.mining, "train_split_only", True):
             from factorminer.application.research_actions import discovery_dataset
             dataset = discovery_dataset(dataset)
     except Exception as exc:

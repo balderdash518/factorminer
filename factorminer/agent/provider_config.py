@@ -20,7 +20,7 @@ from collections import deque
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from factorminer.agent.llm_interface import LLMProvider
+from factorminer.agent.llm_interface import LLMProvider, provider_call_info
 
 PRIMARY = "primary"
 DRAFT = "draft"
@@ -33,6 +33,9 @@ HOSTED_KEY_ENV = {
 }
 LOCAL_PROVIDERS = frozenset({"openai_compatible", "local"})
 DRAFT_KEY_ENV = "FACTORMINER_DRAFT_API_KEY"
+# Key for an OpenAI-compatible endpoint (llm.base_url). Separate from the
+# hosted-provider variables so OPENAI_API_KEY is never sent to a custom URL.
+COMPAT_KEY_ENV = "FACTORMINER_COMPAT_API_KEY"
 
 
 @dataclass(frozen=True)
@@ -64,9 +67,9 @@ def resolve_credential(role: str, provider: str, config: dict[str, Any]) -> Prov
 
     Primary: ``api_key`` in config, else the provider's standard env var.
     Draft: ``draft_api_key`` in the cascade block, else ``FACTORMINER_DRAFT_API_KEY``,
-    else the provider's standard env var for hosted providers. Local engines
-    use an explicit local key or the ``"local"`` placeholder and never read
-    hosted-provider env vars.
+    else the provider's standard env var for hosted providers. OpenAI-compatible
+    engines use an explicit key, else (primary role) ``FACTORMINER_COMPAT_API_KEY``,
+    else the ``"local"`` placeholder; they never read hosted-provider env vars.
     """
     if provider == "mock":
         return ProviderCredential(role, provider, "none")
@@ -74,7 +77,13 @@ def resolve_credential(role: str, provider: str, config: dict[str, Any]) -> Prov
     explicit = config.get(explicit_key)
     if provider in LOCAL_PROVIDERS:
         key = explicit or config.get("local_api_key")
-        return ProviderCredential(role, provider, "config" if key else "local", key or "local")
+        if key:
+            return ProviderCredential(role, provider, "config", str(key))
+        if role == PRIMARY and os.environ.get(COMPAT_KEY_ENV):
+            return ProviderCredential(
+                role, provider, f"env:{COMPAT_KEY_ENV}", os.environ[COMPAT_KEY_ENV]
+            )
+        return ProviderCredential(role, provider, "local", "local")
     if explicit:
         return ProviderCredential(role, provider, "config", str(explicit))
     env_names = ([DRAFT_KEY_ENV] if role == DRAFT else []) + [HOSTED_KEY_ENV.get(provider, "")]
@@ -194,6 +203,10 @@ class GuardedProvider(LLMProvider):
     @property
     def model(self) -> str:
         return str(getattr(self._inner, "model", "") or "")
+
+    @property
+    def last_call(self) -> dict[str, Any]:
+        return provider_call_info(self._inner)
 
     def generate(
         self,

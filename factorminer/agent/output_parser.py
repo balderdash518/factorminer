@@ -13,6 +13,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from factorminer.agent.llm_interface import split_thinking
 from factorminer.core.expression_tree import ExpressionTree
 from factorminer.core.parser import parse, try_parse
 
@@ -163,7 +164,9 @@ def parse_llm_output(raw_text: str) -> tuple[list[CandidateFactor], list[str]]:
         (successfully_parsed, failed_lines) where failed_lines are
         the original text lines that could not be parsed.
     """
-    text = _strip_markdown(raw_text)
+    # Reasoning models may inline <think>...</think>; draft formulas inside it
+    # are not answers.
+    text = _strip_markdown(split_thinking(raw_text)[0])
 
     candidates: list[CandidateFactor] = []
     failed: list[str] = []

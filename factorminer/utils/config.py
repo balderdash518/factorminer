@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -22,10 +23,12 @@ class MiningConfig:
     batch_size: int = 40
     max_iterations: int = 0  # No automatic iteration ceiling; positive values are explicit run boundaries.
     ic_threshold: float = 0.04
-    icir_threshold: float = 0.5
+    icir_threshold: float = 0.0  # paper eq. (10) has no ICIR gate; 0 disables it
     correlation_threshold: float = 0.5
     replacement_ic_min: float = 0.10
     replacement_ic_ratio: float = 1.3
+    # Mine only on data.train_period (purged); the test period stays unseen.
+    train_split_only: bool = True
 
     def validate(self) -> None:
         if self.target_library_size < 1:
@@ -36,8 +39,8 @@ class MiningConfig:
             raise ValueError("max_iterations must be >= 0 (0 means no iteration ceiling)")
         if not (0.0 < self.ic_threshold < 1.0):
             raise ValueError("ic_threshold must be in (0, 1)")
-        if not (0.0 < self.icir_threshold < 10.0):
-            raise ValueError("icir_threshold must be in (0, 10)")
+        if not (0.0 <= self.icir_threshold < 10.0):
+            raise ValueError("icir_threshold must be in [0, 10)")
         if not (0.0 < self.correlation_threshold <= 1.0):
             raise ValueError("correlation_threshold must be in (0, 1]")
         if self.replacement_ic_min <= self.ic_threshold:
@@ -66,7 +69,9 @@ class EvaluationConfig:
             raise ValueError("fast_screen_assets must be >= 1")
         if self.backend not in ("gpu", "numpy", "c"):
             raise ValueError(f"backend must be one of: gpu, numpy, c (got '{self.backend}')")
-        if self.redundancy_metric not in ("spearman", "pearson", "distance_correlation"):
+        if self.redundancy_metric not in (
+            "spearman", "mean_abs_spearman", "pearson", "distance_correlation",
+        ):
             raise ValueError(
                 "redundancy_metric must be one of: spearman, pearson, distance_correlation"
             )
@@ -102,6 +107,10 @@ class DataConfig:
     validation_period: list[str] = field(default_factory=list)
     purge_bars: int = 0
     embargo_bars: int = 0
+    # Cross-sectional z-score / 1-99% winsorization of raw OHLCV fields before
+    # formula evaluation. Off by default (paper semantics); see default.yaml.
+    standardise_raw_features: bool = False
+    winsorise_raw_features: bool = False
     test_period: list[str] = field(
         default_factory=lambda: ["2025-01-01", "2025-12-31"]
     )
@@ -245,6 +254,10 @@ class MemoryConfig:
     """Parameters for the experience memory system."""
 
     policy: str = "paper"
+    seed: str = "empty"  # "empty" | "paper_defaults"
+    # Extra LLM call per batch that interprets the batch feedback (RD-Agent-style
+    # observations / next hypotheses). Off by default: not part of the paper.
+    llm_reflection: bool = False
     max_success_patterns: int = 50
     max_failure_patterns: int = 100
     max_insights: int = 30
@@ -275,6 +288,8 @@ class MemoryConfig:
                 "memory.policy must be one of: paper, none, no_memory, kg, "
                 "family_aware, regime_aware, edit_aware"
             )
+        if self.seed not in ("empty", "paper_defaults"):
+            raise ValueError("memory.seed must be one of: empty, paper_defaults")
         if self.max_success_patterns < 1:
             raise ValueError("max_success_patterns must be >= 1")
         if self.max_failure_patterns < 1:
@@ -711,6 +726,31 @@ class ResearchConfig:
 
 
 @dataclass
+class ObservabilityConfig:
+    """Run tracing (see factorminer.utils.tracing)."""
+
+    # "auto": trace to Langfuse when LANGFUSE_PUBLIC_KEY/SECRET_KEY are set;
+    # "on": same, but warn when they are missing; "off": never.
+    langfuse: str = "auto"
+    # Mirror every observation to <output_dir>/trace_log.jsonl.
+    local_log: bool = True
+    environment: str = "development"
+    release: str = ""
+    sample_rate: float = 1.0
+
+    def validate(self) -> None:
+        if self.langfuse not in ("auto", "on", "off"):
+            raise ValueError("observability.langfuse must be one of: auto, on, off")
+        if not (0.0 < self.sample_rate <= 1.0):
+            raise ValueError("observability.sample_rate must be in (0, 1]")
+        if not re.fullmatch(r"[a-z0-9_-]{1,40}", self.environment) or self.environment.startswith("langfuse"):
+            raise ValueError(
+                "observability.environment must be lowercase alphanumeric with - or _, "
+                "and must not start with 'langfuse'"
+            )
+
+
+@dataclass
 class Config:
     """Top-level configuration aggregating all sub-configs."""
 
@@ -722,6 +762,7 @@ class Config:
     phase2: Phase2Config = field(default_factory=Phase2Config)
     benchmark: BenchmarkConfig = field(default_factory=BenchmarkConfig)
     research: ResearchConfig = field(default_factory=ResearchConfig)
+    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
 
     def validate(self) -> None:
         """Validate all sub-configurations."""
@@ -733,6 +774,7 @@ class Config:
         self.phase2.validate()
         self.benchmark.validate()
         self.research.validate()
+        self.observability.validate()
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize config to a plain dictionary."""
@@ -742,7 +784,7 @@ class Config:
         """Write config to a YAML file."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             yaml.dump(self.to_dict(), f, default_flow_style=False, sort_keys=False)
 
 
@@ -755,6 +797,7 @@ _SECTION_MAP: dict[str, type] = {
     "phase2": Phase2Config,
     "benchmark": BenchmarkConfig,
     "research": ResearchConfig,
+    "observability": ObservabilityConfig,
 }
 
 _PHASE2_SECTION_MAP: dict[str, type] = {
@@ -791,7 +834,7 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     """Load a YAML file and return its contents as a dict."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     if data is None:
         return {}

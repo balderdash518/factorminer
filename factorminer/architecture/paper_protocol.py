@@ -104,7 +104,7 @@ class PaperProtocol:
                 getattr(eval_cfg, "redundancy_metric", getattr(cfg, "redundancy_metric", "spearman"))
             ),
             ic_threshold=float(getattr(mining_cfg, "ic_threshold", 0.04)),
-            icir_threshold=float(getattr(mining_cfg, "icir_threshold", 0.5)),
+            icir_threshold=float(getattr(mining_cfg, "icir_threshold", 0.0)),
             correlation_threshold=float(getattr(mining_cfg, "correlation_threshold", 0.5)),
             replacement_ic_min=float(getattr(mining_cfg, "replacement_ic_min", 0.10)),
             replacement_ic_ratio=float(getattr(mining_cfg, "replacement_ic_ratio", 1.3)),

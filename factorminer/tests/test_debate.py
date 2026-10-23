@@ -79,7 +79,7 @@ def prompt_library_state():
 
 
 def _assert_helix_retrieval_sections(prompt: str) -> None:
-    assert "## HELIX RETRIEVAL SUMMARY" in prompt
+    assert "## EXPERIENCE MEMORY" in prompt
     assert "Prefer library-adjacent structures." in prompt
     assert "Avoid saturated price-only motifs." in prompt
     assert "## COMPLEMENTARY PATTERNS" in prompt

@@ -585,6 +585,18 @@ class FactorLibrary:
                 }
                 for f in recent
             ],
+            # Whole-library view for the generator (paper: global library
+            # perspective); ordered by admission so the newest come last.
+            "members": [
+                {
+                    "id": f.id,
+                    "name": f.name,
+                    "formula": f.formula,
+                    "category": f.category,
+                    "ic_paper_mean": f.ic_paper_mean,
+                }
+                for f in reversed(factors_sorted)
+            ],
             "correlation_threshold": self.correlation_threshold,
             "ic_threshold": self.ic_threshold,
             "dependence_metric": self.dependence_metric.name,

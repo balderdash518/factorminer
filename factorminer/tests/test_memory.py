@@ -96,8 +96,11 @@ class TestFormation:
 
     def test_form_memory_extracts_success_patterns(self, mock_memory, sample_trajectory):
         formed = form_memory(mock_memory.memory, sample_trajectory, batch_number=1)
-        # Should have some patterns (at least the defaults)
-        assert len(formed.success_patterns) >= len(mock_memory.memory.success_patterns)
+        # F returns only this batch's evidence; E merges it into existing memory.
+        assert formed.success_patterns
+        assert all(p.occurrence_count >= 1 for p in formed.success_patterns)
+        evolved = evolve_memory(mock_memory.memory, formed)
+        assert len(evolved.success_patterns) >= len(mock_memory.memory.success_patterns)
 
 
 # ---------------------------------------------------------------------------

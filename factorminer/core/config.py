@@ -24,7 +24,7 @@ class MiningConfig:
     batch_size: int = 40
     max_iterations: int = 0
     ic_threshold: float = 0.04
-    icir_threshold: float = 0.5
+    icir_threshold: float = 0.0
     correlation_threshold: float = 0.5
     replacement_ic_min: float = 0.10
     replacement_ic_ratio: float = 1.3
@@ -58,7 +58,9 @@ class MiningConfig:
             raise ValueError(
                 f"backend must be one of: gpu, numpy, c (got '{self.backend}')"
             )
-        if self.redundancy_metric not in ("spearman", "pearson", "distance_correlation"):
+        if self.redundancy_metric not in (
+            "spearman", "mean_abs_spearman", "pearson", "distance_correlation",
+        ):
             raise ValueError(
                 "redundancy_metric must be one of: spearman, pearson, distance_correlation"
             )

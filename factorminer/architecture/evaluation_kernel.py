@@ -231,25 +231,29 @@ class EvaluationKernel:
             reverse=True,
         )
 
-        kept: list[np.ndarray] = []
+        kept: list[tuple[np.ndarray, str]] = []
         for idx in admitted_indices:
             result = results[idx]
             signals = result.signals
-            duplicate = False
-            for kept_signals in kept:
+            duplicate_of = None
+            for kept_signals, kept_name in kept:
                 corr = self.geometry.library.compute_correlation(signals, kept_signals)
                 if corr >= corr_threshold:
-                    duplicate = True
+                    duplicate_of = (kept_name, float(corr))
                     break
-            if duplicate:
+            if duplicate_of is not None:
                 result.admitted = False
                 result.replaced = None
                 result.stage_passed = min(int(getattr(result, "stage_passed", 0)), 2)
                 result.rejection_reason = (
-                    "Intra-batch deduplication (correlated with higher-IC batch member)"
+                    "Intra-batch deduplication (correlated with higher-IC batch member "
+                    f"{duplicate_of[0]}, rho={duplicate_of[1]:.3f})"
                 )
+                if hasattr(result, "outcome"):
+                    result.outcome = "batch_duplicate"
+                    result.duplicate_of = duplicate_of[0]
             else:
-                kept.append(signals)
+                kept.append((signals, str(getattr(result, "factor_name", ""))))
         return results
 
     # ------------------------------------------------------------------

@@ -33,6 +33,8 @@ class CandidateGeometry:
     novelty_score: float
     library_size: int
     dependence_metric: str
+    nearest_factor_id: int | None = None
+    nearest_factor_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -143,6 +145,7 @@ class LibraryGeometry:
         correlated_ids: list[int] = []
         correlated_names: list[str] = []
         max_corr = 0.0
+        nearest = None
 
         for factor in self.library.list_factors():
             if factor.signals is None:
@@ -150,6 +153,7 @@ class LibraryGeometry:
             corr = float(self.library.compute_correlation(signals, factor.signals))
             if corr > max_corr:
                 max_corr = corr
+                nearest = factor
             if corr >= self.library.correlation_threshold:
                 correlated_ids.append(int(factor.id))
                 correlated_names.append(str(factor.name))
@@ -168,6 +172,8 @@ class LibraryGeometry:
             novelty_score=novelty,
             library_size=self.library.size,
             dependence_metric=self.library.dependence_metric.name,
+            nearest_factor_id=int(nearest.id) if nearest is not None else None,
+            nearest_factor_name=str(nearest.name) if nearest is not None else "",
         )
 
     def replacement_target(self, signals: np.ndarray) -> int | None:

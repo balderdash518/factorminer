@@ -329,6 +329,12 @@ def _run_runtime_mining_loop(
     loop_type = _real_mining_loop_type(baseline, runtime_manifest)
     runtime_output_dir = _ensure_dir(output_dir / "benchmark" / "table1" / baseline / "runtime")
     runtime_cfg = _cfg_for_runtime_baseline(cfg, baseline)
+    if getattr(runtime_cfg.mining, "train_split_only", True):
+        # Mine on the purged train panel only; the frozen benchmark later
+        # re-evaluates the admitted formulas on every split.
+        from factorminer.application.research_actions import discovery_dataset
+
+        dataset = discovery_dataset(dataset)
     run_context = _prepare_runtime_loop(
         runtime_cfg,
         output_dir=runtime_output_dir,

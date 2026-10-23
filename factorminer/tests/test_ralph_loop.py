@@ -365,12 +365,12 @@ class TestValidationPipeline:
 
         r1 = EvaluationResult(
             factor_name="low_ic", formula="Neg($close)",
-            parse_ok=True, ic_mean=0.05, admitted=True,
+            parse_ok=True, ic_mean=0.05, ic_paper_mean=0.05, admitted=True,
             stage_passed=3, signals=signals.copy(),
         )
         r2 = EvaluationResult(
             factor_name="high_ic", formula="CsRank($close)",
-            parse_ok=True, ic_mean=0.10, admitted=True,
+            parse_ok=True, ic_mean=-0.10, ic_paper_mean=0.10, admitted=True,
             stage_passed=3, signals=signals.copy(),
         )
         results = pipeline._deduplicate_batch([r1, r2])

@@ -49,7 +49,7 @@ return structured results or captured error diagnostics.
 Stdio uses the launching account as its boundary. HTTP is opt-in, defaults to
 loopback, and requires `FACTORMINER_MCP_TOKEN`; clients send a bearer token.
 Transport commands, endpoint restrictions, and the separate hosted surface are
-documented in [security](../../docs/security.md#mcp-transports).
+documented in [security](../../docs/upstream/security.md#mcp-transports).
 
 ## Data connectors
 
@@ -82,7 +82,7 @@ uv run factorminer validate-data /tmp/universe.parquet --strict
 
 `factorminer/configs/mcp_sources/ccxt_binance.yaml` shows positional OHLCV mapping.
 An opted-in `amount = close * volume` derivation is recorded as an approximation.
-Use [reproducibility](../../docs/reproducibility.md) for panel, target, and
+Use [reproducibility](../../docs/upstream/reproducibility.md) for panel, target, and
 resampling contracts. Acquiring data and running research are separate workflows.
 
 ## Validation

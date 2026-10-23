@@ -37,6 +37,8 @@ class PreprocessConfig:
         ``"median"`` or ``"mean"``.
     standardise : bool
         Whether to apply cross-sectional z-score standardisation.
+    winsorise : bool
+        Whether to clip ``features_to_standardise`` at the winsor percentiles.
     halt_volume_threshold : float
         Volume below this value flags a bar as a trading halt.
     features_to_standardise : list of str
@@ -49,6 +51,7 @@ class PreprocessConfig:
     ffill_limit: int | None = None
     cross_fill_method: str = "median"
     standardise: bool = True
+    winsorise: bool = True
     halt_volume_threshold: float = 0.0
     features_to_standardise: list[str] = field(default_factory=lambda: [
         "open", "high", "low", "close", "volume", "amount", "vwap", "returns",
@@ -340,7 +343,8 @@ def preprocess(
 
     # 5. Winsorise
     feat_cols = [c for c in config.features_to_standardise if c in df.columns]
-    df = winsorise(df, columns=feat_cols, lower=config.winsor_lower, upper=config.winsor_upper)
+    if config.winsorise:
+        df = winsorise(df, columns=feat_cols, lower=config.winsor_lower, upper=config.winsor_upper)
 
     # 6. Cross-sectional standardisation
     if config.standardise:

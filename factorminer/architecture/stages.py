@@ -44,6 +44,9 @@ class RetrieveStage(LoopStage):
 
     def run(self, loop: Any, payload: IterationPayload) -> None:
         payload.library_state = loop.library.get_state_summary()
+        settings = getattr(loop, "settings", None)
+        if settings is not None:
+            payload.library_state.setdefault("target_size", settings.target_library_size)
         payload.memory_signal = self._retrieve_fn(loop, payload)
 
 

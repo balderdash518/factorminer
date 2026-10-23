@@ -38,7 +38,7 @@ NumPy is the default backend. Optional extras include `mcp`, `research`,
 `embeddings`, `visualization`, and `gpu`; the CUDA extra targets Linux.
 `uv sync --frozen --extra gpu` installs patched PyTorch with CUDA 12.6 and
 CuPy for CUDA 12. The base install needs neither Torch nor a GPU.
-See [backend scope](docs/architecture.md#numerical-backends) and
+See [backend scope](docs/upstream/architecture.md#numerical-backends) and
 [platform setup and checks](CONTRIBUTING.md#optional-model-and-gpu-environments).
 
 ## Quick start
@@ -70,8 +70,8 @@ The bundled data is a workflow sample. The action lane uses the configured
 training split and purges forward-target overlap. Local mining resumes in the
 same output directory and defaults to no iteration ceiling or model-call/wall-time
 quota. A positive `-n` sets a total campaign iteration boundary for experiments.
-See [research actions](docs/research-actions.md) and
-[research skills](docs/research-skills.md) for configuration and recovery.
+See [research actions](docs/upstream/research-actions.md) and
+[research skills](docs/upstream/research-skills.md) for configuration and recovery.
 
 ## Data and evaluation
 
@@ -91,32 +91,47 @@ uv run factorminer -c path/to/config.yaml evaluate output/run/factor_library.jso
 
 Configure targets and train/test periods for the supplied data. Saved scores
 remain metadata; analysis recomputes formulas through the evaluation kernel.
-See [reproducibility](docs/reproducibility.md) for field aliases, metric semantics,
+See [reproducibility](docs/upstream/reproducibility.md) for field aliases, metric semantics,
 frozen comparisons, and baseline provenance. Command-level `--help` lists the
 available mining, analysis, benchmark, and data workflows.
 
 ## Documentation
 
+Local research and implementation notes are kept directly in `docs/`:
+
+| Document | Contents |
+| --- | --- |
+| [Current system](docs/current-system-information-flow.md) | Current architecture and information flow |
+| [Research roadmap](docs/factorminer-research-roadmap.md) | Hypothesis-driven research roadmap |
+| [Memory specification](docs/memory-hypothesis-implementation-spec.md) | Layered memory and hypothesis implementation plan |
+| [Mining feedback](docs/mining-feedback-and-paper-fixes.md) | Feedback flow and paper-alignment changes |
+| [Reproduction gaps](docs/mining-process-reproduction-gap.md) | Mining-process differences from the paper |
+| [Paper audit](docs/paper-implementation-audit.md) | Paper and implementation audit |
+| [RD-Agent reference](docs/rdagent-factor-loop-reference.md) | Reference research-loop design |
+| [Observability](docs/observability.md) | Run records and Langfuse tracing |
+
+The original upstream author's guides are archived in `docs/upstream/`:
+
 | Guide | Contents |
 | --- | --- |
-| [Architecture](docs/architecture.md) | Components, ownership, execution, and persistence |
-| [Research actions](docs/research-actions.md) | Experiment selection and campaign recovery |
-| [Research skills](docs/research-skills.md) | Compile, transfer, and inspect procedure memory |
-| [Reproducibility](docs/reproducibility.md) | Data, metrics, splits, and benchmarks |
-| [Evidence protocol](docs/evidence-protocol.md) | Inference, risk residualization, and cost diagnostics |
-| [Security](docs/security.md) | Input, model, credential, and MCP boundaries |
+| [Architecture](docs/upstream/architecture.md) | Components, ownership, execution, and persistence |
+| [Research actions](docs/upstream/research-actions.md) | Experiment selection and campaign recovery |
+| [Research skills](docs/upstream/research-skills.md) | Compile, transfer, and inspect procedure memory |
+| [Reproducibility](docs/upstream/reproducibility.md) | Data, metrics, splits, and benchmarks |
+| [Evidence protocol](docs/upstream/evidence-protocol.md) | Inference, risk residualization, and cost diagnostics |
+| [Security](docs/upstream/security.md) | Input, model, credential, and MCP boundaries |
 | [Agent integration](integrations/factor-researcher/README.md) | Plugin, managed-agent, and MCP setup |
 
-Optional workflows: [public evidence releases](docs/public-evidence-release.md),
-[partner review](docs/design-partner-pilot.md), and
-[hosted pilot operations](docs/hosted-pilot.md).
+Optional workflows: [public evidence releases](docs/upstream/public-evidence-release.md),
+[partner review](docs/upstream/design-partner-pilot.md), and
+[hosted pilot operations](docs/upstream/hosted-pilot.md).
 
 ## Repository
 
 | Path | Purpose |
 | --- | --- |
 | `factorminer/` | Engine, CLI, configuration, and tests |
-| `docs/` | Technical contracts and workflow guides |
+| `docs/` | Local research notes; original guides in `docs/upstream/` |
 | `data/` | Onboarding sample and provenance manifest |
 | `examples/` | Public-data specifications and checksum locks |
 | `integrations/` | Reference agent packages |
@@ -132,4 +147,4 @@ FactorMiner is [MIT-licensed](LICENSE). Its original research foundation is
 Financial Alpha Discovery*](https://arxiv.org/abs/2602.14670). The project adds
 experiment selection, transferable procedures, and evidence/recovery contracts.
 Paper-specific profiles and baseline coverage are documented in
-[reproducibility](docs/reproducibility.md#paper-compatibility).
+[reproducibility](docs/upstream/reproducibility.md#paper-compatibility).

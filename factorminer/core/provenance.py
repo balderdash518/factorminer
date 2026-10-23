@@ -652,7 +652,9 @@ def build_factor_provenance(
         factor_id=factor_id,
         generator_family=generator_family,
         memory_summary=_compact_memory_signal(memory_signal),
-        library_snapshot=_json_safe(dict(library_state or {})),
+        library_snapshot=_json_safe(
+            {k: v for k, v in dict(library_state or {}).items() if k != "members"}
+        ),
         evaluation=_json_safe(dict(evaluation)),
         admission=_json_safe(dict(admission)),
         phase2=_json_safe(dict(phase2 or {})),

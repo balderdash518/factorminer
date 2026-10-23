@@ -25,6 +25,10 @@ class MiningState:
     recent_rejections: list[dict] = field(default_factory=list)
     domain_saturation: dict[str, float] = field(default_factory=dict)
     admission_log: list[dict] = field(default_factory=list)
+    # Structured evidence from the latest batch (memory.feedback) and a short
+    # per-iteration outcome history used to read trends.
+    last_batch_feedback: dict = field(default_factory=dict)
+    feedback_history: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -37,6 +41,8 @@ class MiningState:
             recent_rejections=d.get("recent_rejections", []),
             domain_saturation=d.get("domain_saturation", {}),
             admission_log=d.get("admission_log", []),
+            last_batch_feedback=d.get("last_batch_feedback", {}),
+            feedback_history=d.get("feedback_history", []),
         )
 
 

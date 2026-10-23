@@ -100,7 +100,7 @@ consumers and the test that proves the old path is no longer required.
 | `integrations/` | deployable agent packaging; no duplicated engine logic |
 | `scripts/` | repository validation, demos, and standalone entry points |
 
-See [Architecture](docs/architecture.md) for the dependency direction and
+See [Architecture](docs/upstream/architecture.md) for the dependency direction and
 runtime contracts.
 
 ## Engineering rules
@@ -130,10 +130,10 @@ Technical documentation describes implemented behavior only:
 
 - `README.md`: product boundary, supported surfaces, setup, common commands,
   and repository map;
-- `docs/architecture.md`: contracts, flows, invariants, and package ownership;
-- `docs/reproducibility.md`: data, splits, metrics, baseline provenance, and
+- `docs/upstream/architecture.md`: contracts, flows, invariants, and package ownership;
+- `docs/upstream/reproducibility.md`: data, splits, metrics, baseline provenance, and
   benchmark interpretation;
-- `docs/security.md`: trust boundaries, controls, and verification;
+- `docs/upstream/security.md`: trust boundaries, controls, and verification;
 - `integrations/<name>/README.md`: integration-specific manifests, interfaces,
   deployment requirements, and permissions.
 
