@@ -7,10 +7,11 @@ the expression tree parser.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from factorminer.agent.llm_interface import split_thinking
@@ -43,6 +44,8 @@ class CandidateFactor:
     expression_tree: ExpressionTree | None = None
     category: str = "unknown"
     parse_error: str = ""
+    # Experiment declarations, not inferred ancestry or evaluator evidence.
+    evidence: dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_valid(self) -> bool:
@@ -171,6 +174,35 @@ def parse_llm_output(raw_text: str) -> tuple[list[CandidateFactor], list[str]]:
     candidates: list[CandidateFactor] = []
     failed: list[str] = []
     seen_names: set = set()
+
+    # Evidence-guided generation uses structured experiments. Keep legacy
+    # numbered output and partial/JSON-like output backwards compatible below.
+    try:
+        structured = json.loads(text)
+    except (ValueError, TypeError):
+        structured = None
+    if isinstance(structured, dict):
+        structured = structured.get("factors")
+    if isinstance(structured, list):
+        for row in structured:
+            if not isinstance(row, dict) or not isinstance(row.get("formula"), str):
+                continue
+            name = str(row.get("name") or _generate_name_from_formula(row["formula"], len(candidates)))
+            base = re.sub(r"\W+", "_", name.lower()) or "factor"
+            name, counter = base, 2
+            while name in seen_names:
+                name, counter = f"{base}_{counter}", counter + 1
+            candidate = _try_build_candidate(name, _clean_formula(row["formula"]))
+            candidate.evidence = {k: row[k] for k in (
+                "hypothesis", "reference_ids", "declared_parent_id", "change_description",
+                "expected_improvement", "falsification_condition", "retention_reason",
+            ) if k in row}
+            candidates.append(candidate)
+            seen_names.add(name)
+            if not candidate.is_valid:
+                failed.append(candidate.formula)
+        if candidates:
+            return candidates, failed
 
     # Try JSON pattern first (entire text)
     json_matches = _JSON_PATTERN.findall(text)

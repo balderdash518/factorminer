@@ -82,10 +82,12 @@ def _compute_cross_sectional_correlation(
         denominator = np.sqrt(
             np.sum(left_centered**2, axis=0) * np.sum(right_centered**2, axis=0)
         )
+        # A constant cross-section has no defined correlation; NaN keeps it
+        # out of IC means instead of counting it as a zero-IC period.
         correlation = np.divide(
             numerator,
             denominator,
-            out=np.zeros_like(numerator),
+            out=np.full_like(numerator, np.nan),
             where=denominator > 1e-12,
         )
         usable = observations >= min_assets

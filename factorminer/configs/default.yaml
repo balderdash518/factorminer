@@ -60,6 +60,14 @@ evaluation:
   # Number of assets used in fast IC screening (Stage 1)
   fast_screen_assets: 100
 
+  # WorldQuant BRAIN-style checks on a market-neutral book, applied after the
+  # IC/ICIR gates and before the library correlation gate. Off by default.
+  # Keys (BRAIN defaults): sharpe_min 1.25, fitness_min 1.0, turnover_min 0.01,
+  # turnover_max 0.70, max_weight 0.10, sub_universe_fraction 0.333,
+  # sub_universe_sharpe_ratio 0.75, liquidity_window 20, periods_per_year 252.
+  portfolio_checks:
+    enabled: false
+
   # GPU device identifier (used when backend is "gpu")
   gpu_device: "cuda:0"
 
@@ -238,6 +246,25 @@ memory:
   # Not part of the paper protocol; numbers in the prompt remain evaluator-computed.
   llm_reflection: false
   reflection_max_tokens: 1024
+  # Provider overrides for the reflection call only (empty = reuse llm).
+  # Keys without `provider` are merged onto `llm`; another provider stands alone.
+  reflection_llm: {}
+
+  # Optional experiment-history retrieval, exact AST checks, advisory LLM
+  # review and bounded replacements. An extension, NOT the paper baseline.
+  evidence_guided:
+    enabled: false
+    reserve_candidates: 2
+    max_replacement_rounds: 2
+    history_limit: 6
+    match_limit: 3
+    max_context_chars: 8000
+    similarity_threshold: 0.65
+    review_enabled: true
+    max_review_calls: 2
+    max_review_candidates: 8
+    review_max_tokens: 2048
+    enable_embeddings: false
 
 # ---------------------------------------------------------------------------
 # Benchmarking and reporting

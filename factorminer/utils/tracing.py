@@ -31,6 +31,7 @@ import hashlib
 import json
 import logging
 import os
+import sys
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import ExitStack, contextmanager
@@ -40,7 +41,29 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_MAX_METADATA_VALUE = 190  # propagate_attributes rejects encoded values over 200 chars
+_MAX_METADATA_VALUE = 200  # SDK v5 limits the JSON-encoded propagated value
+
+
+@contextmanager
+def _remote_context(context: Any) -> Iterator[Any]:
+    """Keep exporter context failures from replacing or suppressing mining errors."""
+    try:
+        remote = context.__enter__()
+    except Exception as exc:
+        logger.debug("Langfuse context enter failed: %s", exc)
+        yield None
+        return
+    error: tuple[Any, Any, Any] = (None, None, None)
+    try:
+        yield remote
+    except BaseException:
+        error = sys.exc_info()
+        raise
+    finally:
+        try:
+            context.__exit__(*error)
+        except Exception as exc:
+            logger.debug("Langfuse context exit failed: %s", exc)
 
 
 class _NullObservation:
@@ -131,6 +154,9 @@ class MiningTracer:
             return None
         try:
             base_url = os.environ.get("LANGFUSE_BASE_URL") or os.environ.get("LANGFUSE_HOST")
+            host = os.environ.get("LANGFUSE_HOST")
+            if base_url and host and base_url.rstrip("/") != host.rstrip("/"):
+                raise ValueError("LANGFUSE_BASE_URL and LANGFUSE_HOST must identify the same host")
             return Langfuse(
                 base_url=base_url,
                 environment=environment,
@@ -159,11 +185,14 @@ class MiningTracer:
                     from langfuse import propagate_attributes
 
                     stack.enter_context(
-                        propagate_attributes(
-                            session_id=self.session_id,
-                            trace_name="mining-iteration",
-                            tags=self.tags,
-                            metadata={**self.metadata, "iteration": str(iteration)},
+                        _remote_context(
+                            propagate_attributes(
+                                session_id=self.session_id,
+                                trace_name="mining-iteration",
+                                tags=self.tags,
+                                metadata={**self.metadata, "iteration": str(iteration)},
+                                environment=self.environment,
+                            )
                         )
                     )
                 except Exception as exc:  # pragma: no cover
@@ -227,7 +256,7 @@ class MiningTracer:
             remote = None
             if remote_cm is not None:
                 try:
-                    remote = stack.enter_context(remote_cm)
+                    remote = stack.enter_context(_remote_context(remote_cm))
                 except Exception as exc:  # pragma: no cover
                     logger.debug("Langfuse observation enter failed: %s", exc)
             observation = _Observation(self, record, remote)
@@ -426,7 +455,12 @@ def _ascii(text: str) -> str:
 
 def _short(value: Any) -> str:
     text = value if isinstance(value, str) else json.dumps(value, default=str)
-    return text[:_MAX_METADATA_VALUE]
+    # v5 JSON-encodes strings too. Quotes, backslashes and control characters
+    # need more space than their raw length; otherwise the SDK drops the value.
+    text = text[:_MAX_METADATA_VALUE - 2]
+    while len(json.dumps(text, ensure_ascii=False)) > _MAX_METADATA_VALUE:
+        text = text[:-1]
+    return text
 
 
 def _json_default(value: Any) -> Any:

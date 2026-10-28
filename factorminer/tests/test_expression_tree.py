@@ -190,6 +190,27 @@ class TestEvaluate:
         out = _safe_div(a, b)
         np.testing.assert_allclose(out, [[0.5, 0.0, 0.0]])
 
+    def test_safe_div_propagates_missing_inputs(self):
+        from factorminer.core.expression_tree import _safe_div
+
+        a = np.array([[1.0, np.nan, np.nan, 2.0]], dtype=np.float64)
+        b = np.array([[np.nan, 2.0, np.nan, 0.0]], dtype=np.float64)
+        out = _safe_div(a, b)
+        assert np.all(np.isnan(out[0, :3]))
+        assert out[0, 3] == 0.0
+        # Broadcast operands keep the same contract.
+        out = _safe_div(np.array([[np.nan], [4.0]]), np.array([[2.0, 4.0]]))
+        np.testing.assert_allclose(out, [[np.nan, np.nan], [2.0, 1.0]])
+
+    def test_ratio_warmup_is_not_ranked_by_asset_order(self):
+        """A rolling ratio stays NaN until its window fills, even under CsRank."""
+        rng = np.random.default_rng(7)
+        close = rng.uniform(10.0, 20.0, size=(6, 12))
+        tree = parse("CsRank(Div($close, TsMax($close, 5)))")
+        out = tree.evaluate({"$close": close})
+        assert np.all(np.isnan(out[:, :4]))
+        assert np.all(np.isfinite(out[:, 4:]))
+
     def test_constant_in_formula(self, small_data):
         tree = parse("Add($close, 0.0001)")
         result = tree.evaluate(small_data)

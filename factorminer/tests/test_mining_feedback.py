@@ -18,9 +18,14 @@ from factorminer.domain.dependence import (
 )
 from factorminer.evaluation.dependence_index import indexed_dependence_metric
 from factorminer.memory.evolution import evolve_memory
-from factorminer.memory.feedback import render_batch_feedback, summarize_trajectory
+from factorminer.memory.feedback import (
+    render_batch_feedback,
+    render_family_ledger,
+    summarize_trajectory,
+    update_family_ledger,
+)
 from factorminer.memory.formation import form_memory
-from factorminer.memory.memory_store import ExperienceMemory
+from factorminer.memory.memory_store import ExperienceMemory, MiningState
 from factorminer.memory.retrieval import retrieve_memory
 from factorminer.utils.config import load_config
 
@@ -300,6 +305,103 @@ def test_loop_passes_configured_reflection_budget(tmp_path, monkeypatch) -> None
     loop._reflect_on_batch()
     assert received == [8192]
     assert loop.memory.state.last_batch_feedback["reflection"]["observations"]
+
+
+def test_loop_reflects_with_its_own_provider_and_the_family_ledger(tmp_path, monkeypatch) -> None:
+    received = []
+
+    def reflect(provider, evidence, **kwargs):
+        received.append((provider, evidence))
+        return None
+
+    monkeypatch.setattr("factorminer.agent.reflection.reflect_on_batch", reflect)
+    cfg = load_config(overrides={"memory": {"llm_reflection": True}})
+    cfg.output_dir = str(tmp_path)
+    rng = np.random.default_rng(0)
+    loop = RalphLoop(cfg, rng.normal(size=(5, 20, 8)), rng.normal(size=(5, 20)))
+    reviewer = object()
+    loop.reflection_provider = reviewer
+    loop.iteration = 2
+    loop.memory.state.last_batch_feedback = {"iteration": 2, "total": 1, "counts": {"low_ic": 1}}
+    loop.memory.state.family_ledger = update_family_ledger(
+        {}, [{"formula": "Neg(Std($close, 20))", "outcome": "low_ic", "ic_paper_mean": 0.01}], 1,
+    )
+    loop._reflect_on_batch()
+    provider, evidence = received[0]
+    assert provider is reviewer
+    assert "FEEDBACK FROM LAST BATCH (iteration 2)" in evidence
+    assert "- Volatility: 1 tested, 0 admitted, 1 weak" in evidence
+
+
+# ---------------------------------------------------------------------------
+# Cumulative per-family ledger
+# ---------------------------------------------------------------------------
+
+
+def _entry(formula: str, outcome: str, ic: float = 0.0) -> dict:
+    return {"formula": formula, "outcome": outcome, "ic_paper_mean": ic}
+
+
+def test_family_ledger_accumulates_outcomes_best_formulas_and_repeats() -> None:
+    ledger = update_family_ledger({}, [
+        _entry("CsRank(Std($returns, 20))", "low_ic", 0.012),
+        _entry("Neg(Std($returns, 60))", "admitted", 0.051),
+        _entry("Std($bogus, 5)", "parse_error"),
+        _entry("CsRank(Delta($close, 5))", "redundant", 0.07),
+    ], 1)
+    ledger = update_family_ledger(ledger, [
+        _entry("CsRank( Std($returns, 20) )", "low_ic", 0.012),  # same formula, other spacing
+        _entry("Std($returns, 10)", "low_ic", 0.03),
+    ], 3)
+
+    vol = ledger["Volatility"]
+    assert (vol["tested"], vol["admitted"], vol["weak"], vol["broken"]) == (5, 1, 3, 1)
+    assert vol["repeats"] == 1
+    assert vol["evaluated"] == 4  # the parse error carries no IC
+    assert vol["ic_sum"] == pytest.approx(0.012 + 0.051 + 0.012 + 0.03)
+    assert [b["ic"] for b in vol["best"]] == [0.051, 0.03]
+    assert vol["last_iteration"] == 3
+    assert ledger["Momentum"]["redundant"] == 1
+
+
+def test_family_ledger_renders_every_family_repeats_and_untried_families() -> None:
+    ledger = update_family_ledger({}, [
+        _entry("Std($returns, 20)", "low_ic", 0.01),
+        _entry("Std($returns, 20)", "low_ic", 0.01),
+        _entry("Delta($close, 5)", "low_ic", 0.02),
+    ], 4)
+    text = render_family_ledger(ledger)
+    assert text.startswith("=== EXPLORATION HISTORY BY FAMILY (all batches, 3 candidates) ===")
+    assert "- Volatility: 2 tested, 0 admitted, 2 weak; |IC| best 0.0100, mean 0.0100; last it4" in text
+    assert "    Delta($close, 5)  (|IC| 0.0200, it4, low_ic)" in text
+    assert "1 candidate(s) exactly repeated an earlier formula" in text
+    untried = text.splitlines()[-1]
+    assert untried.startswith("No candidates yet in: ")
+    assert "Higher-Moment" in untried and "Volatility" not in untried
+    assert "VWAP" in untried
+    no_vwap = render_family_ledger(ledger, ["$close", "$volume", "$amt", "$returns"])
+    assert "VWAP" not in no_vwap.splitlines()[-1]
+    assert "Amount" in no_vwap.splitlines()[-1]
+    assert render_family_ledger({}) == ""
+
+
+def test_family_ledger_survives_formation_checkpoint_and_reaches_the_prompt() -> None:
+    memory = ExperienceMemory()
+    for batch, ic in ((1, 0.01), (2, 0.02)):
+        trajectory = [{"factor_id": f"f{batch}", "formula": "Neg(Std($close, 20))", "ic": ic,
+                       "outcome": "low_ic", "admitted": False, "rejection_reason": "low IC"}]
+        memory = evolve_memory(memory, form_memory(memory, trajectory, batch))
+    ledger = memory.state.family_ledger
+    assert ledger["Volatility"]["tested"] == 2 and ledger["Volatility"]["repeats"] == 1
+    restored = MiningState.from_dict(memory.state.to_dict())
+    assert restored.family_ledger == ledger
+    prompt = retrieve_memory(
+        memory, library_state={"library_size": 0, "available_features": ["$close"]},
+    )["prompt_text"]
+    assert "VWAP" not in prompt.split("No candidates yet in:")[-1]
+    # The ledger covers batch 1 even though the feedback shows only batch 2.
+    assert "FEEDBACK FROM LAST BATCH (iteration 2)" in prompt
+    assert "- Volatility: 2 tested, 0 admitted, 2 weak" in prompt
 
 
 # ---------------------------------------------------------------------------

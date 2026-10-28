@@ -41,6 +41,9 @@ class MiningArtifactService:
             (loop._run_manifest or {}).get("artifact_paths", {})
         )
         existing_paths.update(artifact_paths or {})
+        guidance = getattr(loop, "evidence_guidance", None)
+        if guidance is not None:
+            existing_paths["attempt_archive"] = str(guidance.archive.path)
         manifest = build_run_manifest(
             run_id=loop._session.session_id,
             session_id=loop._session.session_id,
@@ -119,6 +122,7 @@ class MiningArtifactService:
     ) -> None:
         """Stamp provenance onto factors that survived admission."""
         loop = self.loop
+        guidance = getattr(loop, "evidence_guidance", None)
         if not admitted_results or loop._session is None:
             return
 
@@ -169,6 +173,11 @@ class MiningArtifactService:
                     "replaced": result.replaced,
                     "correlated_with": result.correlated_with,
                     "rejection_reason": result.rejection_reason,
+                    **({
+                        "attempt_id": result.attempt_id,
+                        "declared_parent_id": result.declared_parent_id,
+                        "nearest_prior_ids": list(result.nearest_prior_ids),
+                    } if guidance is not None else {}),
                 },
                 phase2=phase2_summary,
                 target_stack=run_manifest.get("target_stack", []),

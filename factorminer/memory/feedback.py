@@ -16,6 +16,8 @@ nothing about the economic idea behind it.
 
 from __future__ import annotations
 
+import copy
+import hashlib
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -25,6 +27,7 @@ COMPUTE_ERROR = "compute_error"
 INVALID_SIGNAL = "invalid_signal"
 LOW_IC = "low_ic"
 LOW_ICIR = "low_icir"
+FAILED_CHECKS = "failed_checks"  # evaluation.portfolio_checks (Sharpe, turnover, ...)
 REDUNDANT = "redundant"
 BATCH_DUPLICATE = "batch_duplicate"
 RESEARCH_REJECTED = "research_rejected"
@@ -33,7 +36,7 @@ REPLACED = "replaced"
 REJECTED = "rejected"  # legacy entry without enough detail to classify
 
 IMPLEMENTATION_OUTCOMES = frozenset({PARSE_ERROR, COMPUTE_ERROR, INVALID_SIGNAL})
-QUALITY_OUTCOMES = frozenset({LOW_IC, LOW_ICIR})
+QUALITY_OUTCOMES = frozenset({LOW_IC, LOW_ICIR, FAILED_CHECKS})
 REDUNDANCY_OUTCOMES = frozenset({REDUNDANT, BATCH_DUPLICATE})
 SUCCESS_OUTCOMES = frozenset({ADMITTED, REPLACED})
 
@@ -105,6 +108,19 @@ def _icir(entry: Mapping[str, Any]) -> float:
     return 0.0
 
 
+def _portfolio(entry: Mapping[str, Any]) -> dict[str, float]:
+    """Book metrics from evaluation.portfolio_checks, rounded for the prompt."""
+    book = entry.get("portfolio") or {}
+    keys = ("sharpe", "fitness", "turnover", "returns", "sub_universe_sharpe")
+    return {key: round(float(book[key]), 3) for key in keys if book.get(key) is not None}
+
+
+def _weak_rank(entry: Mapping[str, Any]) -> float:
+    """Sharpe when the book was simulated (the binding gate), else |IC|."""
+    book = entry.get("portfolio") or {}
+    return float(book["sharpe"]) if book.get("sharpe") is not None else _quality(entry)
+
+
 def _short(formula: str, limit: int = 160) -> str:
     formula = str(formula or "")
     return formula if len(formula) <= limit else formula[: limit - 3] + "..."
@@ -130,7 +146,7 @@ def summarize_trajectory(
         (e for e in entries if e["_outcome"] in REDUNDANCY_OUTCOMES), key=_quality, reverse=True
     )
     weak = sorted(
-        (e for e in entries if e["_outcome"] in QUALITY_OUTCOMES), key=_quality, reverse=True
+        (e for e in entries if e["_outcome"] in QUALITY_OUTCOMES), key=_weak_rank, reverse=True
     )
     broken = [e for e in entries if e["_outcome"] in IMPLEMENTATION_OUTCOMES]
 
@@ -176,6 +192,7 @@ def summarize_trajectory(
                 "ic": round(_quality(e), 4),
                 "icir": round(_icir(e), 3),
                 "reason": str(e.get("rejection_reason", "") or ""),
+                **({"portfolio": _portfolio(e)} if _portfolio(e) else {}),
             }
             for e in weak[:3]
         ],
@@ -216,6 +233,21 @@ def _diagnose(
         notes.append(
             f"{n_broken}/{total} formulas did not run (parse/compute/invalid). "
             "Fix syntax and operator arity first; these say nothing about the ideas."
+        )
+    failed_checks = [e for e in entries if e["_outcome"] == FAILED_CHECKS]
+    if failed_checks:
+        tally = Counter(
+            reason.split(" ")[0] if not reason.startswith("Sub-universe") else "Sub-universe"
+            for e in failed_checks
+            for reason in str(e.get("rejection_reason", "")).split("; ")
+            if reason
+        )
+        sharpes = sorted(_weak_rank(e) for e in failed_checks)
+        notes.append(
+            f"{len(failed_checks)}/{evaluated} failed the portfolio checks "
+            f"(median Sharpe {sharpes[len(sharpes) // 2]:.2f}); failing checks: "
+            + ", ".join(f"{name} {count}" for name, count in tally.most_common())
+            + ". Sharpe ~ IC x sqrt(breadth): a steadier IC sign matters more than a larger mean."
         )
     if n_weak / evaluated >= 0.5:
         ics = sorted(_quality(e) for e in entries if e["_outcome"] in QUALITY_OUTCOMES)
@@ -276,7 +308,7 @@ def render_batch_feedback(
         return ""
     counts: Mapping[str, int] = feedback.get("counts", {})
     order = [
-        ADMITTED, REPLACED, REDUNDANT, BATCH_DUPLICATE, LOW_IC, LOW_ICIR,
+        ADMITTED, REPLACED, REDUNDANT, BATCH_DUPLICATE, LOW_IC, LOW_ICIR, FAILED_CHECKS,
         RESEARCH_REJECTED, PARSE_ERROR, COMPUTE_ERROR, INVALID_SIGNAL, REJECTED,
     ]
     count_text = ", ".join(f"{name}={counts[name]}" for name in order if counts.get(name))
@@ -313,9 +345,18 @@ def render_batch_feedback(
                 )
             lines.append(f"  ~ {item['formula']}  (|IC| {item['ic']:.4f}; {target})")
     if feedback.get("weak"):
-        lines.append("Closest to the IC gate but rejected:")
+        gate = "portfolio checks" if any(i.get("portfolio") for i in feedback["weak"]) else "IC gate"
+        lines.append(f"Closest to the {gate} but rejected:")
         for item in feedback["weak"]:
-            lines.append(f"  - {item['formula']}  (|IC| {item['ic']:.4f}, ICIR {item['icir']:.2f})")
+            book = item.get("portfolio") or {}
+            book_text = (
+                f"; Sharpe {book['sharpe']:.2f}, Fitness {book.get('fitness', 0.0):.2f}, "
+                f"Turnover {book.get('turnover', 0.0):.0%}"
+                if "sharpe" in book else ""
+            )
+            lines.append(
+                f"  - {item['formula']}  (|IC| {item['ic']:.4f}, ICIR {item['icir']:.2f}{book_text})"
+            )
     if feedback.get("implementation_errors"):
         lines.append("Did not run (fix the formula, not the idea):")
         for item in feedback["implementation_errors"]:
@@ -342,3 +383,116 @@ def render_reflection(reflection: Mapping[str, Any] | None) -> str:
             lines.append(f"  {title}:")
             lines.extend(f"    - {item}" for item in items)
     return "\n".join(lines) if len(lines) > 1 else ""
+
+
+# ---------------------------------------------------------------------------
+# Cumulative per-family ledger
+# ---------------------------------------------------------------------------
+
+_LEDGER_EXAMPLES = 2
+
+
+def _formula_key(formula: str) -> str:
+    return hashlib.sha1("".join(str(formula).split()).encode("utf-8")).hexdigest()[:12]
+
+
+def _empty_ledger_row() -> dict[str, Any]:
+    return {
+        "tested": 0, "admitted": 0, "redundant": 0, "weak": 0, "broken": 0,
+        "evaluated": 0, "ic_sum": 0.0, "repeats": 0, "last_iteration": 0,
+        "best": [], "seen": [],
+    }
+
+
+def update_family_ledger(
+    ledger: Mapping[str, Mapping[str, Any]] | None,
+    trajectory: Iterable[Mapping[str, Any]],
+    iteration: int,
+) -> dict[str, dict[str, Any]]:
+    """Fold one batch into the cumulative per-family record (returns a new dict).
+
+    Families come from :func:`factorminer.architecture.families.infer_family`.
+    Each row keeps outcome counts, the |IC| sum over formulas that ran, the
+    best formulas so far and short hashes of every formula, so an exact
+    resubmission of an earlier formula is counted as a repeat.
+    """
+    from factorminer.architecture.families import infer_family
+
+    updated = {family: copy.deepcopy(dict(row)) for family, row in (ledger or {}).items()}
+    for entry in trajectory:
+        formula = str(entry.get("formula", "") or "")
+        if not formula:
+            continue
+        outcome = candidate_outcome(entry)
+        row = updated.setdefault(infer_family(formula), _empty_ledger_row())
+        key = _formula_key(formula)
+        if key in row["seen"]:
+            row["repeats"] += 1
+        else:
+            row["seen"].append(key)
+        row["tested"] += 1
+        row["last_iteration"] = int(iteration)
+        if outcome in SUCCESS_OUTCOMES:
+            row["admitted"] += 1
+        elif outcome in REDUNDANCY_OUTCOMES:
+            row["redundant"] += 1
+        elif outcome in IMPLEMENTATION_OUTCOMES:
+            row["broken"] += 1
+            continue
+        else:
+            row["weak"] += 1
+        ic = _quality(entry)
+        row["evaluated"] += 1
+        row["ic_sum"] = round(row["ic_sum"] + ic, 6)
+        if all(b["formula"] != _short(formula, 120) for b in row["best"]):
+            row["best"].append({
+                "formula": _short(formula, 120),
+                "ic": round(ic, 4),
+                "iteration": int(iteration),
+                "outcome": outcome,
+            })
+            row["best"] = sorted(row["best"], key=lambda b: b["ic"], reverse=True)[:_LEDGER_EXAMPLES]
+    return updated
+
+
+def render_family_ledger(
+    ledger: Mapping[str, Mapping[str, Any]] | None,
+    available_features: Iterable[str] | None = None,
+) -> str:
+    """Render the cumulative per-family record as prompt text.
+
+    ``available_features`` hides untried families the dataset cannot express
+    (e.g. VWAP without ``$vwap``); ``None`` assumes every leaf exists.
+    """
+    if not ledger:
+        return ""
+    from factorminer.architecture.families import FAMILY_REQUIRED_FEATURE, FINE_FAMILIES
+
+    rows = sorted(ledger.items(), key=lambda item: (-int(item[1].get("tested", 0)), item[0]))
+    total = sum(int(row.get("tested", 0)) for _, row in rows)
+    lines = [f"=== EXPLORATION HISTORY BY FAMILY (all batches, {total} candidates) ==="]
+    for family, row in rows:
+        parts = [f"{row['tested']} tested", f"{row['admitted']} admitted"]
+        parts += [f"{row[key]} {key}" for key in ("redundant", "weak", "broken") if row.get(key)]
+        line = f"- {family}: {', '.join(parts)}"
+        if row.get("evaluated"):
+            mean = float(row["ic_sum"]) / int(row["evaluated"])
+            line += f"; |IC| best {row['best'][0]['ic']:.4f}, mean {mean:.4f}"
+        lines.append(f"{line}; last it{row.get('last_iteration', '?')}")
+        for best in row.get("best", []):
+            lines.append(f"    {best['formula']}  (|IC| {best['ic']:.4f}, it{best['iteration']}, {best['outcome']})")
+    repeats = sum(int(row.get("repeats", 0)) for _, row in rows)
+    if repeats:
+        lines.append(
+            f"{repeats} candidate(s) exactly repeated an earlier formula; "
+            "re-testing a formula returns the same numbers."
+        )
+    available = set(available_features) if available_features is not None else None
+    untried = [
+        family for family in FINE_FAMILIES
+        if family not in ledger
+        and (available is None or FAMILY_REQUIRED_FEATURE.get(family, "") in available | {""})
+    ]
+    if untried:
+        lines.append(f"No candidates yet in: {', '.join(untried)}")
+    return "\n".join(lines)

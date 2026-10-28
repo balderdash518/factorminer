@@ -1,0 +1,570 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Qwen 挖因子思考审计</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~70ch) with wide figures and tables allowed to breathe to 1040px; findings as numbered evidence blocks. */
+:root{
+  --bg:#f7f8fa; --paper:#ffffff; --ink:#14171c; --ink-2:#4b525d; --ink-3:#7a818c;
+  --rule:#dde1e7; --tint:#eef3fb; --accent:#2a78d6; --accent-ink:#1c5cab;
+  --warn-bg:#fff6e5; --warn-ink:#7a4b00; --bad:#d03b3b; --good:#0ca30c;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --ref:#9aa1ab;
+  --f-display:"Noto Serif SC","Songti SC","SimSun",serif;
+  --f-body:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#121417; --paper:#1a1d21; --ink:#eceef1; --ink-2:#b9bfc8; --ink-3:#8a919b;
+  --rule:#2e333a; --tint:#1d2633; --accent:#5598e7; --accent-ink:#86b6ef;
+  --warn-bg:#2d2414; --warn-ink:#f2c46b; --bad:#e66767; --good:#3cc43c;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --ref:#6b727c; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#121417; --paper:#1a1d21; --ink:#eceef1; --ink-2:#b9bfc8; --ink-3:#8a919b;
+  --rule:#2e333a; --tint:#1d2633; --accent:#5598e7; --accent-ink:#86b6ef;
+  --warn-bg:#2d2414; --warn-ink:#f2c46b; --bad:#e66767; --good:#3cc43c;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --ref:#6b727c; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:16px;line-height:1.75;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 64px}
+.wrap{max-width:1040px;margin:0 auto}
+.col{max-width:720px}
+header.top{padding-block:48px 28px;border-bottom:1px solid var(--rule);margin-bottom:32px}
+.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);font-weight:500}
+h1{font-family:var(--f-display);font-size:clamp(28px,4.4vw,40px);line-height:1.25;margin:10px 0 14px;text-wrap:balance}
+h2{font-family:var(--f-display);font-size:24px;line-height:1.35;margin:56px 0 12px;text-wrap:balance;padding-top:8px;border-top:2px solid var(--ink)}
+h3{font-size:17px;line-height:1.5;margin:28px 0 6px;text-wrap:balance}
+p{margin:0 0 14px}
+.lede{color:var(--ink-2);font-size:17px}
+.meta{display:flex;flex-wrap:wrap;gap:6px 20px;font-size:13px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+code,.mono{font-family:var(--f-mono);font-size:.86em;background:var(--tint);padding:1px 5px;border-radius:3px;word-break:break-word}
+a{color:var(--accent-ink)}
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:12px;margin:20px 0 8px}
+.summary div{background:var(--paper);border:1px solid var(--rule);padding:14px 16px;min-width:0}
+.summary b{display:block;font-size:15px;margin-bottom:4px}
+.summary span{color:var(--ink-2);font-size:14px;line-height:1.65}
+.find{display:grid;grid-template-columns:52px 1fr;gap:0 14px;margin:26px 0;min-width:0}
+.find .no{font-family:var(--f-mono);font-size:13px;color:var(--accent-ink);padding-top:5px}
+.find>div{min-width:0}
+.find h3{margin-top:0}
+blockquote{margin:10px 0 14px;padding:10px 14px;background:var(--paper);border-left:3px solid var(--ref);color:var(--ink-2);font-size:14px;line-height:1.7}
+blockquote .src{display:block;font-size:12px;color:var(--ink-3);margin-top:4px;font-family:var(--f-mono)}
+blockquote .en{font-family:var(--f-mono);font-size:12.5px;color:var(--ink-2)}
+.tbl{overflow-x:auto;margin:14px 0 18px;border:1px solid var(--rule);background:var(--paper)}
+table{border-collapse:collapse;width:100%;font-size:14px;line-height:1.6}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-weight:700;font-size:12.5px;letter-spacing:.04em;color:var(--ink-2);background:var(--tint)}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+figure{margin:18px 0 22px;background:var(--paper);border:1px solid var(--rule);padding:14px 14px 10px}
+figcaption{font-size:13px;color:var(--ink-3);margin-top:6px;line-height:1.6}
+.fig-title{font-weight:700;font-size:14.5px;margin-bottom:2px}
+.fig-sub{font-size:13px;color:var(--ink-3);margin-bottom:8px}
+.chart{width:100%;overflow-x:auto;position:relative}
+.chart svg{display:block;width:100%;height:auto;min-width:560px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--ink-2);margin:2px 0 6px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.tip{position:absolute;pointer-events:none;background:var(--paper);border:1px solid var(--rule);box-shadow:0 4px 14px rgba(0,0,0,.12);padding:8px 10px;font-size:12.5px;line-height:1.5;max-width:340px;color:var(--ink);z-index:5}
+.tip .mono{background:none;padding:0;font-size:11.5px;color:var(--ink-2)}
+.note{background:var(--warn-bg);color:var(--warn-ink);padding:10px 14px;font-size:14px;margin:12px 0}
+.pill{display:inline-block;font-size:11.5px;font-weight:700;letter-spacing:.06em;padding:1px 8px;border-radius:10px;border:1px solid currentColor;margin-right:6px;vertical-align:1px}
+.p0{color:var(--bad)} .p1{color:var(--accent-ink)} .p2{color:var(--ink-3)}
+ul,ol{padding-left:22px;margin:0 0 14px}
+li{margin:3px 0}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:14px}
+.two>figure{margin:0;min-width:0}
+pre.mermaid{background:var(--paper);border:1px solid var(--rule);padding:14px;overflow-x:auto;font-size:13px}
+.toc{font-size:14px;columns:2 240px;margin:6px 0 0;padding-left:20px}
+.toc li{break-inside:avoid}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (max-width:560px){.find{grid-template-columns:1fr}.find .no{padding:0}}
+</style>
+
+<div class="wrap">
+<header class="top">
+  <div class="eyebrow">FactorMiner · 思考轨迹审计 · run 20261024_004453</div>
+  <h1>Qwen 挖因子思考审计</h1>
+  <p class="lede col">对 24 日凌晨那次 36 轮挖掘的全部思考过程逐轮复盘：模型在想什么，金融先验是怎么被调用、又是怎么被框架和反馈扭曲的，以及 pipeline 应该怎样改。</p>
+  <div class="meta">
+    <span>SP500 · 551 只 × 750 个交易日 · 2023–2025 训练段</span>
+    <span>Qwen/Qwen3.8-27B-FP8 · Ralph loop · 36 轮 × 8</span>
+    <span>288 个候选 · 入库 0</span>
+    <span>审计日期 2026-10-24</span>
+  </div>
+</header>
+
+<section class="col">
+<p><b>一句话结论：</b>这次运行里，模型的金融先验本身是够用的，第 10 轮它就想到了 12 个月动量。但它在四重限制下工作：不知道市场和标签，算子窗口被截断到 60，反馈信号低于噪声底，反思环节没有记忆。结果是 36 轮实际上在做"有约束的随机采样"，信息没有随轮次积累。</p>
+<ol class="toc">
+  <li><a href="#s1">证据来源</a></li>
+  <li><a href="#s2">一轮迭代里发生了什么</a></li>
+  <li><a href="#s3">思考倾向与偏差（8 条）</a></li>
+  <li><a href="#s4">先验知识是怎么被使用的</a></li>
+  <li><a href="#s5">提示词与框架的影响</a></li>
+  <li><a href="#s6">框架改进建议</a></li>
+  <li><a href="#s7">怎么验证改进有效</a></li>
+</ol>
+</section>
+
+<div class="summary">
+  <div><b>研究判断让位给自我核对</b><span>每千词思考里，含糊措辞 48.6 次、语法/格式核对 11.8 次，经济机制只有 4.4 次，提到所处市场 0.3 次。</span></div>
+  <div><b>正确的先验被框架截断</b><span>模型写下"长期动量 Return(close, 252?)，但窗口上限 60"，随后把 60 日减 10 日称作"经典 12-1 动量"。</span></div>
+  <div><b>反思者把噪声讲成故事</b><span>136 条假设里 120 条用"库是空的所以不相关"作为正交理由；136 条 avoid 里 38 条禁止的恰好是最接近门槛的方向。</span></div>
+  <div><b>生成器只是翻译器</b><span>每轮生成几乎一一执行上一轮反思的 4 条假设；反思只看最近一批，所以整个搜索是一个只有一步记忆的马尔可夫链。</span></div>
+  <div><b>结果与随机公式分不开</b><span>|t|&gt;2 的候选有 11 个，纯噪声预期约 13 个；前、中、后三段平均 |IC| 为 0.0033 / 0.0035 / 0.0037。</span></div>
+  <div><b>算力配置倒挂</b><span>生成 56%、反思 42%、评估 2% 的墙钟时间；每轮约 78 个草拟公式只有 8 个被真正评估。</span></div>
+</div>
+
+<h2 id="s1">1. 证据来源</h2>
+<div class="col">
+<p>这份审计同时使用了本地日志和 Langfuse 云端轨迹。两边结构一致：每轮 1 个 trace，下挂 8 个 observation（检索记忆、生成、解析、评估、更新库、反思、记忆蒸馏、迭代根节点），共 36 个 trace、288 个 observation。Qwen 的思考文本两边都完整保留。</p>
+</div>
+<div class="tbl"><table>
+<thead><tr><th>来源</th><th>内容</th><th class="n">体量</th><th>审计时的用途</th></tr></thead>
+<tbody>
+<tr><td><code>trace_log.jsonl</code></td><td>每轮的记忆 prompt、生成输入/思考/输出、评估明细、反思输入/思考/输出</td><td class="n">288 spans</td><td>主分析材料</td></tr>
+<tr><td>Langfuse（jp.cloud）</td><td>session <code>factorminer-20261024_004453-d490dc0c</code>，含 token 用量、延迟、prompt 版本</td><td class="n">36 traces / 288 obs</td><td>交叉核对、可观测性缺口</td></tr>
+<tr><td>生成阶段思考</td><td>36 次 <code>propose-factors</code></td><td class="n">207,551 词</td><td>先验调用、偏差统计</td></tr>
+<tr><td>反思阶段思考</td><td>36 次 <code>reflect-on-batch</code></td><td class="n">178,404 词</td><td>假设质量、退化循环</td></tr>
+<tr><td><code>global_trial_ledger.jsonl</code></td><td>288 个候选的逐日 IC 序列</td><td class="n">288 × 750</td><td>噪声底、复现</td></tr>
+<tr><td>本地重算</td><td>用项目自己的表达式引擎重算全部 288 个信号</td><td class="n">288 signals</td><td>覆盖度、修复除法后的 IC</td></tr>
+</tbody></table></div>
+<div class="col">
+<p>Langfuse 侧有三个可观测性缺口，会直接影响以后的分析：</p>
+<ul>
+<li><b>生成 prompt 没有挂到托管版本。</b>反思调用链接了 <code>factorminer/reflect-on-batch</code> v2，生成调用的 promptName 为空。原因是 <code>resolve_prompt</code> 发现本次特征集（6 个字段，没有 <code>$amt</code>）生成的 system prompt 与默认版本的哈希不同，于是回退到本地 prompt。最关键的 prompt 反而没有版本记录。</li>
+<li><b>没有任何 score。</b>每个候选的 IC、是否入库都没有作为 score 写回 trace，所以无法在 Langfuse 里按结果筛选或做趋势图。</li>
+<li><b>首 token 时间和成本为空。</b>流式调用没有设置 completionStartTime；自托管模型没有价格，成本列全空。</li>
+</ul>
+</div>
+
+<h2 id="s2">2. 一轮迭代里发生了什么</h2>
+<div class="col">
+<p>每一轮的数据流如下。注意两个 LLM 调用之间唯一的通道是反思写进 prompt 的那段文字。</p>
+</div>
+<pre class="mermaid">
+flowchart LR
+  M["检索记忆<br/>上一批反馈 + 家族汇总<br/>（每族只留 2 个例子）"] --> G["生成 propose-factors<br/>约 13k token 思考<br/>草拟约 78 个公式 → 输出 8 个"]
+  G --> E["评估 evaluate<br/>约 1.1 秒/公式<br/>|IC| ≥ 0.02 ?"]
+  E --> R["反思 reflect-on-batch<br/>约 9.7k token 思考<br/>4 条观察 / 4 条假设 / 4 条 avoid"]
+  R --> D["记忆蒸馏<br/>无入库 → 成功模式与禁区为空"]
+  D --> M
+</pre>
+<figure>
+  <div class="fig-title">每轮墙钟时间构成</div>
+  <div class="fig-sub">单位：秒。生成 9,262 s（56%），反思 7,036 s（42%），评估 324 s（2%）。第 10、33 轮的反思因思考退化跑满 30.8k token 上限。</div>
+  <div class="legend"><span><i style="background:var(--s1)"></i>生成</span><span><i style="background:var(--s2)"></i>反思</span><span><i style="background:var(--s3)"></i>评估</span></div>
+  <div class="chart" id="c-time"></div>
+  <figcaption>来源：trace_log.jsonl 中各 span 的 duration_s；与 Langfuse latency 一致。</figcaption>
+</figure>
+<div class="col">
+<p>这张图说明了一件事：真正产生信息的是评估，它只占 2% 的时间。每轮模型在思考里草拟约 78 个公式样式的字符串（最多 132 个），其中 90% 在没有任何数据的情况下被它凭感觉淘汰。评估一个公式只需约 1 秒，所以"让 LLM 当过滤器"是这个框架里最贵、信息最少的环节。</p>
+</div>
+
+<h2 id="s3">3. 思考倾向与偏差</h2>
+<div class="col">
+<p>下面 8 条按"从生成到反思"的顺序排列。每条都给出可复核的计数和原文摘录（英文原文保留，附中文意译）。</p>
+</div>
+
+<figure>
+  <div class="fig-title">生成阶段思考内容的构成</div>
+  <div class="fig-sub">每千词中关键词出现次数，36 轮合计 207,551 词。关键词表见附录。</div>
+  <div class="chart" id="c-think"></div>
+  <figcaption>基于关键词计数，用来看比例，不是精确分类。三段轮次（1–12、13–24、25–36）的比例几乎不变，说明思考模式没有随反馈改变。</figcaption>
+</figure>
+
+<div class="find"><div class="no">B1</div><div>
+<h3>思考预算花在自我核对上，而不是研究判断</h3>
+<p>典型的生成思考是：先把整份算子表抄一遍，然后对每个草稿逐个写 "Check … valid. Good."。经济含义通常只有一句 "Economic: …"，没有对方向、量级、适用周期做任何推断。含糊措辞（maybe / could / might）每千词 48.6 次，是经济机制词的 11 倍。</p>
+<blockquote><span class="en">"Check: TsMin($low, 30), TsMax($high, 30) valid. … Div safe. Sign(Delta($volume,7)) valid. Mul valid. CsRank valid. … Economic: price position in 30-day range signed by recent volume change."</span><br>逐个核对算子是否合法，经济解释只有一句。<span class="src">it1 · propose-factors · thinking</span></blockquote>
+<p><b>根因：</b>prompt 把"必须能解析""只能用列出的算子""不要 markdown"写成硬规则并反复强调，却没有一个需要它写出预期方向和理由的输出字段。模型就把注意力放在不会被惩罚的地方。</p>
+</div></div>
+
+<div class="find"><div class="no">B2</div><div>
+<h3>不知道自己在交易什么</h3>
+<p>20 万词思考里，S&amp;P / SP500 出现 0 次，"t+1" 0 次，"forward return" 1 次。prompt 从未告诉它：股票池是美国大盘股，标签是 close(t+2)/close(t+1)−1（跳过一天），评估是日频横截面 Rank IC。于是它调用的是"一般意义上的 alpha 教科书"，大量借用 A 股/日内高频语境里才有效的叙事（"informed flow""trapped flow""buying pressure"）。</p>
+<blockquote><span class="en">"Need maybe generate 8 with high chance? Since previous all weak, maybe need more powerful known alphas? With only OHLCV, IC 0.02 hard."</span><br>它意识到用 OHLCV 很难到 0.02，但不知道为什么难，也没有可以据此调整的信息。<span class="src">it5 · propose-factors · thinking</span></blockquote>
+</div></div>
+
+<div class="find"><div class="no">B3</div><div>
+<h3>正确的先验被框架截断</h3>
+<p>这是整次运行里最关键的一条证据。模型知道横截面最强的简单因子是 12-1 月动量，但 <code>Return/Delay/Delta/LogReturn</code> 的窗口上限被定为 60，它就把"长期"重新定义成了 60 天，还给它贴上"经典 12-1 动量"的标签。在这份数据上，真正的 12-1 动量 IC 约 0.030，是唯一能过门槛的经典因子；60 日动量只有 0.004。</p>
+<blockquote><span class="en">"Long-term momentum: CsRank(Return($close, 252? but window max 60 for Return, so max 60). Could use Return($close, 60)."</span><br>本想写 252 日，因为窗口上限改成 60。<span class="src">it10 · propose-factors · thinking</span></blockquote>
+<blockquote><span class="en">"CsRank(Sub(Return($close,60), Return($close,10))). This is classic 12-1 momentum. Could be strong."</span><br>把 60 日减 10 日当成 12-1 动量。<span class="src">it11 · propose-factors · thinking</span></blockquote>
+<p>在 36 轮里，涉及 120 或 250 日窗口的候选只有 10 个；反思提出的 136 条假设里，只有 3 条提到长周期。</p>
+</div></div>
+
+<div class="find"><div class="no">B4</div><div>
+<h3>被算子说明误导</h3>
+<p>system prompt 把 <code>CsNeutralize</code> 描述为 "industry-neutralize"，但数据里没有行业字段，实现只是横截面去均值（对 CsRank 来说等于什么都没做）。模型在思考中 346 次提到 CsNeutralize、238 次提到 industry，反复纠结"没有行业数据它还能不能用"，并把它当成降噪手段。同类问题还有 <code>KAMA</code>（实现是普通 EMA）。</p>
+<blockquote><span class="en">"Maybe use industry-neutralized volume-weighted price location. CsNeutralize instead of CsZScore? Could be stronger if industry removes noise."</span><br>以为在做行业中性化，实际上是去均值。<span class="src">it18 · propose-factors · thinking</span></blockquote>
+</div></div>
+
+<div class="find"><div class="no">B5</div><div>
+<h3>方向焦虑与"反正测不了"的心态</h3>
+<p>门槛是 |mean IC|，方向不影响入库，但 prompt 没说，模型在每个草稿上反复犹豫要不要套 <code>Neg</code>（sign / direction 每千词 7.1 次）。同时它清楚自己拿不到任何评估结果，生成逐渐变成"写出看起来合理的东西"。</p>
+<blockquote><span class="en">"Since library empty, any |IC|&gt;=0.02. Hard. We just need plausible. Need not actually test."</span><br>只需要"看起来合理"，不需要真的检验。<span class="src">it18 · propose-factors · thinking</span></blockquote>
+<blockquote><span class="en">"However all 232 candidates failed, best 0.0128. Maybe data regime makes standard factors weak. Need generate plausible but maybe not guarantee. We just output candidates."</span><br>它其实猜到了"数据环境让常规因子变弱"，但框架没有任何动作可以去验证这个猜测。<span class="src">it30 · propose-factors · thinking</span></blockquote>
+</div></div>
+
+<div class="find"><div class="no">B6</div><div>
+<h3>反思者把噪声讲成因果故事</h3>
+<p>反思 prompt 要求每条假设说明"为什么既有预测力又与库不相关"。库一直是空的，这个要求变成了模板句。更严重的是 avoid 列表：它基于单个样本、差异小于一个标准误的 |IC|，封杀整个家族，甚至专门禁止"最接近门槛"的方向。</p>
+<div class="tbl"><table>
+<thead><tr><th>反思输出的特征（34 次成功解析，136 条假设 / 136 条 avoid）</th><th class="n">条数</th></tr></thead>
+<tbody>
+<tr><td>假设用"库是空的所以不相关"作为正交理由</td><td class="n">120 / 136</td></tr>
+<tr><td>假设使用日内/资金流/微观结构叙事</td><td class="n">92 / 136</td></tr>
+<tr><td>假设涉及长周期（60 日以上、月、年）</td><td class="n">3 / 136</td></tr>
+<tr><td>avoid 封杀整个家族（动量、波动率、高阶矩、相关、条件、极值）</td><td class="n">61 / 136</td></tr>
+<tr><td>avoid 禁止的恰好是"最接近门槛 / 最好"的方向</td><td class="n">38 / 136</td></tr>
+</tbody></table></div>
+<blockquote><span class="en">"Avoid plain momentum or delta-based price changes, since five- and fifteen-day momentum variants already produced only |IC| 0.0055."</span><br>第 2 轮，仅凭 5 日和 15 日两个样本就禁掉了整个动量家族。<span class="src">it2 · reflect-on-batch · avoid</span></blockquote>
+<blockquote><span class="en">"Avoid close/open-volume correlation, sign(close-open)*volume, and range-normalized return means, since they were closest but rejected."</span><br>理由是"它们最接近门槛"。<span class="src">it29 · reflect-on-batch · avoid</span></blockquote>
+<p>根因在于：本次运行的单个候选 IC 标准误约 0.0047，"最接近门槛"的前三名彼此之间、与 0 之间都分不开。框架把这些数字原样交给反思者，却没有给出不确定性。</p>
+</div></div>
+
+<div class="find"><div class="no">B7</div><div>
+<h3>反思的形式约束在消耗算力，并引发退化</h3>
+<p>"每条最多 40 个词"让反思思考中 13.4% 的 token 用来逐词计数（形如 "All1 eight2 iteration-2 formulas3 …"）。第 10 和 33 轮的反思跑满 30.8k token 上限（finish_reason=length），各耗时约 587 秒，最终无法解析。第 10 轮是典型的重复退化：同一句话循环了 318 次。</p>
+<blockquote><span class="en">"Could use $high/$low if available? The formulas use $open, $close, $volume, $returns. Maybe $high/$low not guaranteed but likely in alpha library? We can propose using $high and $low? Need maybe avoid if not known."</span><br>反思 prompt 不包含可用字段和算子表，模型不确定 $high/$low 是否存在，在这里打转直到 token 用完。<span class="src">it10 · reflect-on-batch · thinking（重复 318 次）</span></blockquote>
+</div></div>
+
+<div class="find"><div class="no">B8</div><div>
+<h3>生成器是翻译器，反思者是只有一步记忆的研究总监</h3>
+<p>对照每轮反思的 4 条假设和下一轮的 8 个公式，生成器几乎逐条照做（例如第 8 轮的 overnight-intraday divergence、return-range intensity、range compression、price-volume slope divergence，第 9 轮原样出现，名字都一样）。真正决定搜索方向的是反思，而反思的输入只有最近一批的结果和家族汇总，看不到自己以前提过的假设、这些假设后来的结果。于是搜索在少数机制间来回转，第 34 轮的输出几乎是第 2 轮的翻版（短期反转、60 日"长动量"、低波、Amihud、K 线位置）。</p>
+</div></div>
+
+<h2 id="s4">4. 先验知识是怎么被使用的</h2>
+<div class="col">
+<p>把 36 轮的思考连起来读，可以分成四个阶段。</p>
+</div>
+<div class="tbl"><table>
+<thead><tr><th>阶段</th><th>轮次</th><th>模型在做什么</th><th>代表因子</th></tr></thead>
+<tbody>
+<tr><td>A · 教科书采样</td><td class="n">1–5</td><td>调出最常见的日频量价因子清单，挑 8 个"多样"的</td><td>5 日反转、60 日动量、低波、Amihud、偏度、K 线位置</td></tr>
+<tr><td>B · 单样本封杀</td><td class="n">2–8</td><td>反思用 1–2 个弱样本否定整个家族，avoid 不断累积</td><td>"Avoid plain momentum…"</td></tr>
+<tr><td>C · 微观结构组合</td><td class="n">6–30</td><td>教科书被禁后，转向在日 K 线上拼接"资金流/压力"叙事</td><td>收盘位置 × 量能 z 值、跳空 × 日内强度、上下影线 × 量</td></tr>
+<tr><td>D · 回到教科书</td><td class="n">31–36</td><td>只看最近一批，忘了早期已测过；重新采样同一份清单</td><td>第 34 轮 ≈ 第 2 轮</td></tr>
+</tbody></table></div>
+
+<figure>
+  <div class="fig-title">288 个候选的 |IC|，与噪声底和门槛对照</div>
+  <div class="fig-sub">每个点是一个候选。灰线：2 倍标准误（≈0.0094，低于它即与 0 分不开）；橙线：入库门槛 0.02。悬停查看公式。</div>
+  <div class="chart" id="c-ic"></div>
+  <figcaption>|t|&gt;2 的候选 11 个，纯噪声预期约 13 个；三段平均 |IC| 为 0.0033 / 0.0035 / 0.0037，没有上升趋势。</figcaption>
+</figure>
+
+<figure>
+  <div class="fig-title">轮次增加，有没有扫到新的信号区域？</div>
+  <div class="fig-sub">每轮 8 个候选与之前所有轮候选信号的最大 |ρ|，取中位数（修复除法后重算）。越接近 1，说明越是在重复已经测过的信号。悬停查看每轮新信号个数。</div>
+  <div class="chart" id="c-cov"></div>
+  <figcaption>第 2–8 轮中位数 0.59–0.80，每批有 2–3 个新信号（|ρ|&lt;0.5）；第 9 轮起多在 0.9 以上，新信号 0–1 个。288 个候选按 |ρ|≥0.5 贪心聚类只有 57 簇：前 12 轮 32 簇，中间 12 轮 11 簇，最后 12 轮 14 簇。</figcaption>
+</figure>
+
+<div class="col">
+<p>这三张图合起来回答了"有没有足够的发散性"：公式写法是发散的（273/288 不重复），信号层面却大量重复：第 2–36 轮的 280 个候选里，121 个（43%）与更早的某个候选 |ρ|&gt;0.9，相当于换了写法的同一个信号。288 次评估实际只覆盖了约 57 个不同的信号簇，后 24 轮只新增 25 簇。结果层面则完全没有积累。它不是死循环，而是一个没有梯度的随机游走：每一步都"不同"，但没有一步是根据可信证据走的。</p>
+</div>
+
+<h3>为什么先验没有起作用</h3>
+<div class="col">
+<p>LLM 的金融先验是"在一般市场里，哪些机制历史上有效"。要让它真正起作用，至少需要三样东西，这次运行都缺：</p>
+<ol>
+<li><b>情境：</b>市场、股票池、标签周期、样本长度。没有这些，它只能取"平均情境"下的先验，而 SP500 大盘股 + 跳过一天的标签恰好是短周期量价因子最弱的情境。</li>
+<li><b>表达能力：</b>先验指向的因子要能写出来。窗口上限 60 让最强的那条先验（12-1 动量）写不出来，加上除法 bug，长窗口的写法还会被稀释 1/3。</li>
+<li><b>可信的反馈：</b>先验需要被数据确认或否定。反馈低于噪声底时，"否定"本身就是噪声，反思把它当成事实，最终把正确的先验也封杀了。</li>
+</ol>
+</div>
+
+<h2 id="s5">5. 提示词与框架的影响</h2>
+<div class="col"><p>下表列出这次运行里对 Agent 行为影响最大的设计点，按影响从大到小排列。</p></div>
+<div class="tbl"><table>
+<thead><tr><th>设计点</th><th>位置</th><th>对 Agent 的影响</th><th>证据</th></tr></thead>
+<tbody>
+<tr><td>反馈不带不确定性</td><td><code>memory/feedback.py</code></td><td>"最接近门槛"的排序是噪声，反思据此封杀方向</td><td>SE≈0.0047；11/288 vs 13 预期</td></tr>
+<tr><td>prompt 不含市场、股票池、标签</td><td><code>agent/prompt_builder.py</code></td><td>只能调用平均情境先验</td><td>SP500 提及 0 次</td></tr>
+<tr><td>Delay/Return/Delta 窗口 ≤ 60</td><td>算子注册表</td><td>12-1 动量写不出来，"长期"被重定义为 60 日</td><td>it10、it11 原文</td></tr>
+<tr><td><code>_safe_div</code> 把 NaN 变 0</td><td><code>core/expression_tree.py:219</code></td><td>长窗口因子 IC 被稀释约 1/3，最有希望的方向被压在门槛下</td><td>288 个候选修复后最高 0.0178（250 日区间位置，原 0.0122）；手写对照 Mean20/Mean250 从 0.0168 升到 0.0240</td></tr>
+<tr><td>反思看不到历史假设和字段表</td><td><code>agent/reflection.py</code></td><td>一步记忆的马尔可夫链；退化循环</td><td>it34 ≈ it2；it10 重复 318 次</td></tr>
+<tr><td>反思要求"预测力 + 与库不相关"</td><td>托管 prompt v2</td><td>空库下变成模板句</td><td>120/136</td></tr>
+<tr><td>反馈里的启发式话术</td><td><code>feedback.py:257, 288</code></td><td>"窗口调整很少有用，换底层信号""三轮没入库就换方向"，系统性地推动放弃</td><td>恰好与"长窗口才有效"相反</td></tr>
+<tr><td>家族按算子关键词分类，每族只留 2 例</td><td><code>architecture/families.py:21</code></td><td>覆盖图失真（Cross-Sectional 117 个），早期测过的邻域从上下文消失</td><td>13 个精确重复</td></tr>
+<tr><td>输出格式禁止解释</td><td>生成 prompt</td><td>假设、预期方向不进入记录，无法事后核对"假设是否被证伪"</td><td>—</td></tr>
+<tr><td>每批只评估 8 个</td><td>配置</td><td>每轮约 70 个草稿被 LLM 凭感觉丢弃</td><td>草稿中位数 78</td></tr>
+<tr><td>算子说明与实现不符</td><td>system prompt</td><td>CsNeutralize、KAMA 被误用和反复纠结</td><td>346 次提及</td></tr>
+<tr><td>40 词上限</td><td>托管 prompt v2</td><td>13.4% 的反思 token 用于数词</td><td>—</td></tr>
+</tbody></table></div>
+
+<div class="note">关于门槛：在同一份数据和标签下独立测试 14 个经典因子，只有 12-1 月动量（0.030）过 0.02，1/5/20 日反转、波动率、Amihud、K 线位置全部低于 0.013。"一个也没挖到"首先是数据与门槛的组合决定的，其次才是 Agent 的问题。</div>
+
+<h2 id="s6">6. 框架改进建议</h2>
+<div class="col">
+<p>建议的核心思路是：<b>把 LLM 从"凭感觉生成并过滤公式"的位置挪到"提出可证伪的假设、解释可信的证据"的位置，把大规模枚举和统计判断交给便宜的程序。</b>下面按你关心的三个方向组织，最后给一个整体架构和落地顺序。</p>
+</div>
+
+<h3>6.1 先让反馈变得可学习（这是其他一切的前提）</h3>
+<div class="col"><ul>
+<li><b>每个候选都报告不确定性。</b>给出 mean IC、标准误、t 值和 block bootstrap 置信区间；标出"显著为正/负""与 0 分不开"三种状态。反馈里"最接近门槛"只列显著的，不显著的统一写成"未能区分于 0"，不给排序。</li>
+<li><b>把筛选和入库分开。</b>入库门槛可以保持严格，但给反思看的应该是"这个方向有没有信号"：例如对同一假设下的一组变体做 FDR 控制后的检验，或看变体 IC 分布是否整体偏离 0。</li>
+<li><b>在 prompt 里写明情境。</b>市场、股票池、频率、标签公式、训练期长度、预热期处理、"门槛用 |IC|，方向无所谓"。这几行字的成本几乎为零。</li>
+<li><b>先跑基线做标定。</b>每次新数据集，先自动评估一组固定的经典因子（Alpha158 / 动量 / 反转 / 低波 / 规模），把结果作为"这个数据集上什么有效"的先验证据放进第一轮 prompt。本次如果有这一步，第 1 轮就会知道只有长周期动量有效。</li>
+<li><b>门槛按数据集自动标定。</b>例如以随机公式 IC 分布的 99 分位或基线因子的分位数为准，避免在一个"物理上不可能"的门槛下空转 36 轮。</li>
+</ul></div>
+
+<h3>6.2 搜索更广阔的空间</h3>
+<div class="col"><ul>
+<li><b>LLM 出"假设 + 骨架"，程序做枚举。</b>让 LLM 输出结构化假设：机制、预期方向、适用周期、骨架公式（窗口、阈值等留作参数槽）。程序对每个骨架做网格枚举（窗口 5/10/20/60/120/250，平滑与否，rank/zscore），一次评估几十到上百个变体。评估 1 秒一个，这比 LLM 多想 1 万个 token 便宜得多。</li>
+<li><b>放开窗口上限并显式覆盖周期。</b>Delay/Return 至少放到 252；把"周期"作为一个独立维度（日内/1 周/1 月/1 季/1 年），每轮强制每个周期桶至少有 1 个候选。</li>
+<li><b>按"机制 × 周期 × 数据字段"建覆盖网格。</b>用多臂老虎机（如 Thompson sampling）在格子之间分配评估预算：没测过的格子有探索奖励，测过且显著的格子做局部精修，测过且确定无效的格子降权但不永久封禁。</li>
+<li><b>把 LLM 的草稿全部交给评估。</b>思考里已经写出约 78 个草稿，直接解析出来去重后全部评估，比让 LLM 凭感觉挑 8 个更有信息量。</li>
+<li><b>加入局部变异。</b>对显著的候选做程序化变异（换窗口、换字段、加条件），类似遗传编程，LLM 只负责解释哪些变异方向有经济意义。</li>
+</ul></div>
+
+<h3>6.3 更高效地利用记忆</h3>
+<div class="col">
+<p>把现在的"上一批反馈 + 家族汇总"换成一个结构化的<b>假设账本</b>。每条假设一行，生成和反思都必须引用账本里的 ID。</p>
+</div>
+<div class="tbl"><table>
+<thead><tr><th>字段</th><th>例子</th><th>用途</th></tr></thead>
+<tbody>
+<tr><td>hypothesis_id / 机制</td><td>H-017 · 价格动量（12-1）</td><td>按机制去重、检索</td></tr>
+<tr><td>周期 / 字段 / 预期方向</td><td>~252 日 · close · 正</td><td>覆盖网格的坐标</td></tr>
+<tr><td>已测变体</td><td>14 个，窗口 120–252</td><td>防止重复评估</td></tr>
+<tr><td>证据</td><td>变体 IC 中位数 0.024，CI [0.012, 0.035]，FDR 后 3 个显著</td><td>可信反馈</td></tr>
+<tr><td>状态</td><td>支持 / 证伪 / 证据不足</td><td>决定探索还是精修</td></tr>
+<tr><td>重开条件</td><td>"证据不足：样本 &lt; 2 年，换数据集后重测"</td><td>避免永久封杀</td></tr>
+</tbody></table></div>
+<div class="col"><ul>
+<li><b>评估前查重。</b>先按规范化公式哈希查，再按信号相关性查（与历史某候选 ρ&gt;0.95 视为重复），命中就直接返回历史结果，并在反馈里说明"这是第 N 次测试"。</li>
+<li><b>检索按机制而不是按算子。</b>家族分类改为机制 × 周期 × 字段；每族保留的不只是最好 2 例，而是"已测邻域摘要"（窗口范围、变体数、结论）。</li>
+<li><b>反思必须读账本。</b>反思的输入里加上它以前提出的假设和各自的检验结果，输出必须标明每条新假设是"新开""精修 H-xxx"还是"重开 H-xxx"。</li>
+<li><b>思考里的推理留档。</b>允许生成输出一个简短的 rationale 字段（机制、预期方向、预期周期），写进账本，这样事后才能判断"假设被证伪"还是"实现写错"。</li>
+</ul></div>
+
+<h3>6.4 减少偏见，别被自己的反馈带偏</h3>
+<div class="col"><ul>
+<li><b>avoid 必须有统计依据。</b>只有当一组变体整体显著无效（例如 CI 上界 &lt; 0.005 且变体数 ≥ 10）时才允许封禁；单样本、与 0 分不开的结果只能标为"证据不足"。封禁要带范围和到期轮次。</li>
+<li><b>每批混入对照。</b>每批固定加 1–2 个随机公式和 1 个已知基线，用来实时标定噪声底；如果 LLM 候选的 |IC| 分布和随机公式分不开，系统应该直接提示"当前方向没有信息"，而不是让反思继续讲故事。</li>
+<li><b>反思和生成角色分离，并引入反方。</b>一个角色负责从账本里找"被过早否定的方向"，一个负责找"可能是噪声的正面结果"。两者分歧时以统计检验为准。</li>
+<li><b>强制探索配额。</b>例如每批 8 个里，至少 2 个来自未覆盖的格子、至少 2 个是账本里"证据不足"假设的重测。</li>
+<li><b>别让话术替系统做决定。</b>删除 <code>feedback.py</code> 里"窗口调整很少有用""三轮没入库就换方向"这类固定话术，改成根据数据生成的诊断（例如"同一机制下窗口 20→250 的 IC 单调上升"）。</li>
+<li><b>对 holdout 保持盲。</b>挖掘全程不看 2026 年数据；累计尝试次数纳入最终检验（deflated Sharpe 或 FDR），避免"试得越多越容易撞到假阳性"。</li>
+</ul></div>
+
+<h3>6.5 工程与可观测性</h3>
+<div class="col"><ul>
+<li><span class="pill p0">P0</span>修复 <code>_safe_div</code> 的 NaN 传播；常数截面的 IC 记为 NaN 而不是 0；CsRank 并列值用平均秩。</li>
+<li><span class="pill p0">P0</span>Delay/Return/Delta 窗口上限放到 252；修正 CsNeutralize、KAMA 的说明（或实现真正的行业中性化）。</li>
+<li><span class="pill p1">P1</span>反思 prompt 带上字段和算子表；去掉 40 词上限，改为结构化 JSON 字段长度限制；加重复检测，发现循环立即截断重试；反思 max_tokens 设到 8k 左右。</li>
+<li><span class="pill p1">P1</span>生成 prompt 改为模板化（特征表作为变量），让它能挂上 Langfuse 托管版本；每个候选的 IC、t 值、outcome 作为 score 写回 trace；设置 completionStartTime。</li>
+<li><span class="pill p2">P2</span>限制生成阶段的思考预算（或改用非推理模式生成骨架、推理模式只用于反思），把省下的时间换成评估。</li>
+</ul></div>
+
+<h3>建议的整体架构</h3>
+<pre class="mermaid">
+flowchart TB
+  B["数据集标定<br/>基线因子 + 随机公式 → 噪声底、可行门槛"] --> L
+  L[("假设账本<br/>机制 × 周期 × 字段<br/>证据 · 状态 · 重开条件")] --> P
+  P["调度器（老虎机）<br/>探索未覆盖格子 / 精修有效格子 / 重测证据不足"] --> H
+  H["LLM 假设者<br/>情境 + 账本 → 结构化假设 + 骨架"] --> X
+  X["程序枚举与变异<br/>窗口网格 · 字段替换 · 去重缓存"] --> E
+  E["评估<br/>IC · SE · CI · FDR · 与随机对照比较"] --> R
+  R["LLM 解释者 + 反方审稿<br/>只能引用带置信区间的证据"] --> L
+  E --> A["入库<br/>严格门槛 + 冗余检查"]
+</pre>
+
+<h3>落地顺序</h3>
+<div class="tbl"><table>
+<thead><tr><th>顺序</th><th>改动</th><th>预期效果</th><th>验收</th></tr></thead>
+<tbody>
+<tr><td class="n">1</td><td>修除法 bug、放开窗口、prompt 写明情境、反馈带 SE 和 t 值</td><td>长周期方向不再被压制和误判</td><td>12-1 动量类候选在前 5 轮出现并被正确评估</td></tr>
+<tr><td class="n">2</td><td>数据集标定（基线 + 随机对照）</td><td>门槛与噪声底可见</td><td>第 1 轮 prompt 含基线结果</td></tr>
+<tr><td class="n">3</td><td>假设账本 + 反思读账本 + 评估前查重</td><td>记忆从一步变成全历史</td><td>精确/近似重复为 0；每条假设有状态</td></tr>
+<tr><td class="n">4</td><td>LLM 出骨架、程序枚举，每轮评估 100+ 变体</td><td>每单位算力的信息量上升一个量级</td><td>固定预算内显著候选数高于随机公式基线</td></tr>
+<tr><td class="n">5</td><td>覆盖网格 + 老虎机调度 + 反方审稿</td><td>系统性扩大搜索、减少自我强化</td><td>覆盖格子数随轮次单调增加</td></tr>
+</tbody></table></div>
+
+<h2 id="s7">7. 怎么验证改进有效</h2>
+<div class="col">
+<p>"挖出一个因子"不是好的验收标准，它会鼓励放宽门槛或在同一份数据上多试。建议用下面四个指标对比改动前后，同一数据、同一预算：</p>
+<ol>
+<li><b>相对随机基线的命中率：</b>LLM 候选中显著（FDR 后）的比例，减去同等数量随机公式的比例。这次运行这个差值约为 0。</li>
+<li><b>每次评估的信息增益：</b>覆盖格子数、账本里"支持/证伪"状态的假设数，随评估次数的增长曲线。</li>
+<li><b>信号新颖度：</b>每轮新候选与历史候选最大相关系数的分布，看是否持续有低相关的新信号。</li>
+<li><b>样本外稳定性：</b>只在最终阶段使用 2026 holdout，考察入库因子 IC 的衰减，并对累计尝试次数做多重检验校正。</li>
+</ol>
+</div>
+
+<h2 id="app">附录：方法说明</h2>
+<div class="col">
+<ul>
+<li><b>思考内容分类</b>使用关键词正则计数：语法/格式（valid、parse、check、params…）、经济机制（mechanism、liquidity、overreaction、informed…）、历史/反馈（history、tested、weak、avoid…）、IC/强度（IC、threshold、predictive…）、含糊（maybe、might、could…）、方向（sign、negate、direction…）、市场情境（S&amp;P、SP500、large cap、horizon、t+1…）。只用于看相对比例。</li>
+<li><b>噪声底：</b>每日 Rank IC 标准差约 0.13，750 天均值的标准误约 0.0047；|t|&gt;2 的纯噪声预期比例约 4.55%。候选之间存在相关，所以这是近似值。</li>
+<li><b>覆盖度：</b>用项目自己的表达式引擎（修复除法 NaN 传播后）重算 288 个信号，在第 260 天以后每 8 天取一个截面，计算截面秩的合并 Pearson 相关。</li>
+<li><b>复现：</b>原 IC 与 ledger 一致（例如规模因子 −0.0128）；分析脚本保存在本次会话的临时目录。</li>
+</ul>
+</div>
+</div>
+
+<script>
+const D = {"times": [[1, 224, 87, 22.2], [2, 115, 141, 5.6], [3, 310, 110, 1.7], [4, 311, 262, 12.8], [5, 311, 220, 27.0], [6, 254, 183, 26.3], [7, 236, 159, 2.8], [8, 243, 230, 25.0], [9, 409, 228, 2.3], [10, 270, 586, 2.8], [11, 266, 185, 1.6], [12, 162, 191, 25.6], [13, 350, 198, 1.7], [14, 190, 143, 2.6], [15, 220, 224, 23.1], [16, 428, 181, 1.5], [17, 171, 87, 2.1], [18, 253, 139, 2.9], [19, 295, 133, 1.7], [20, 174, 166, 1.7], [21, 203, 262, 23.5], [22, 191, 90, 1.3], [23, 289, 189, 1.9], [24, 118, 114, 2.6], [25, 225, 150, 2.0], [26, 423, 221, 13.7], [27, 185, 246, 2.3], [28, 284, 101, 2.3], [29, 317, 175, 24.8], [30, 248, 226, 1.5], [31, 164, 100, 23.6], [32, 346, 182, 2.2], [33, 289, 587, 2.6], [34, 244, 168, 2.7], [35, 296, 239, 1.4], [36, 248, 133, 22.9]], "pts": [[1, 0.00384, "range_position_vol_sign", "CsRank(Mul(Div(Sub($close, TsMin($low, 30)), Sub(TsMax($high, 30), TsMin($low, 30))), Sign"], [1, 0.0036, "volume_hma_surprise", "CsZScore(Div(Sub($volume, HMA($volume, 15)), Std($volume, 40)))"], [1, 0.00032, "return_volume_corr", "CsZScore(Neg(Corr($returns, $volume, 25)))"], [1, 0.00413, "conditional_volume_rank", "CsRank(IfElse(Greater(Delta($close, 5), 0), TsRank($volume, 10), Neg(TsRank($volume, 10)))"], [1, 0.00065, "residual_return_sign", "CsRank(Mul(Resid($returns, $volume, 20), Sign(Delta($close, 5))))"], [1, 0.00516, "vol_adjusted_momentum", "CsZScore(Div(Return($close, 15), Std($returns, 20)))"], [1, 0.00173, "gap_volume_sign", "CsRank(Mul(Sub(Div($open, Delay($close, 1)), 1), Sign(Delta($volume, 3))))"], [1, 0.00662, "volume_dispersion_demeaned", "CsDemean(Sub(Quantile($volume, 20, 0.8), Quantile($volume, 20, 0.2)))"], [2, 0.00554, "short_term_reversal", "Neg(CsRank(Delta($close, 5)))"], [2, 0.00418, "long_momentum", "CsRank(Return($close, 60))"], [2, 0.00391, "low_volatility", "Neg(CsZScore(Std($returns, 60)))"], [2, 0.00662, "amihud_illiquidity", "CsRank(Mean(Div(Abs($returns), $volume), 20))"], [2, 0.00393, "volume_surge", "CsZScore(Div($volume, Median($volume, 20)))"], [2, 0.00093, "return_skewness", "CsZScore(Skew($returns, 20))"], [2, 0.00668, "intraday_drift", "CsRank(Mean(Div(Sub($close, $open), $close), 10))"], [2, 0.00232, "range_liquidity", "CsRank(Div(Sub(TsMax($high, 30), TsMin($low, 30)), Mean($volume, 30)))"], [3, 0.00277, "net_money_flow_14", "CsRank(Div(Sum(IfElse(Greater($returns, 0), $volume, IfElse(Less($returns, 0), Neg($volume"], [3, 0.00132, "chaikin_money_flow_10", "CsRank(Div(Sum(Mul(Div(Sub(Sub($close, $low), Sub($high, $close)), Sub($high, $low)), $vol"], [3, 0.00655, "log_volume_weighted_reversal_5", "Neg(CsRank(Div(Sum(Mul($returns, Log($volume)), 5), Sum(Log($volume), 5))))"], [3, 0.00744, "vwap_deviation_20", "CsRank(Sub(Div($close, Div(Sum(Mul($close, $volume), 20), Sum($volume, 20))), 1))"], [3, 0.00711, "overnight_reversal_10", "Neg(CsRank(Sum(Sub(Div($open, Delay($close, 1)), 1), 10)))"], [3, 0.00426, "trend_efficiency_10", "CsRank(Div(Delta($close, 10), Sum(Abs($returns), 10)))"], [3, 0.00291, "log_volume_range_liquidity_20", "CsRank(Neg(Div(Log($volume), Mean(Sub($high, $low), 20))))"], [3, 0.00639, "log_volume_trend_60", "CsRank(Div(TsLinRegSlope(Log($volume), 60), Mean(Log($volume), 60)))"], [4, 4e-05, "intraday_range_shock_reversal", "Neg(CsZScore(Div(Sub(Sub($high, $low), Mean(Sub($high, $low), 20)), Std(Sub($high, $low), "], [4, 0.00153, "close_position_30d_momentum", "CsRank(Div(Sub($close, TsMin($low, 30)), Sub(TsMax($high, 30), TsMin($low, 30))))"], [4, 0.00258, "volume_quantile_shock", "CsRank(Div($volume, Quantile($volume, 60, 0.75)))"], [4, 0.00338, "price_volume_slope_divergence", "Neg(CsRank(Sub(Div(TsLinRegSlope($close, 15), Mean($close, 15)), Div(TsLinRegSlope($volume"], [4, 0.00273, "up_down_volume_flow", "CsRank(Div(Sum(IfElse(Greater($returns, 0), $volume, 0), 14), Add(Sum(IfElse(Less($returns"], [4, 0.00336, "intraday_open_close_range_reversal", "Neg(CsRank(Div(Sub($close, $open), Sub($high, $low))))"], [4, 0.00792, "amihud_illiquidity", "CsRank(Div(Abs($returns), $volume))"], [4, 0.00316, "kama_distance_reversal", "Neg(CsRank(Div($close, KAMA($close, 20))))"], [5, 0.00324, "log_volume_weighted_momentum", "CsRank(Div(Sum(Mul($returns, Log($volume)), 60), Sum(Log($volume), 60)))"], [5, 0.00076, "lagged_return_volume_corr", "CsZScore(Corr(Delay($returns, 1), $volume, 30))"], [5, 0.00576, "momentum_tstat_60_20", "CsZScore(Div(LogReturn($close, 60), Std($returns, 20)))"], [5, 0.00345, "price_volume_rank_product", "CsRank(Mul(TsRank($close, 60), TsRank($volume, 20)))"], [5, 0.00076, "log_volume_surprise_120", "CsZScore(Sub(Log($volume), Log(Median($volume, 120))))"], [5, 0.0083, "lagged_volume_surge_beta", "CsZScore(Beta($returns, Delay(Div($volume, Mean($volume, 20)), 1), 30))"], [5, 0.00137, "high_volume_return_timing", "CsRank(Div(TsArgMax(Mul($returns, Log($volume)), 15), 15))"], [5, 0.0001, "return_quantile_spread_30", "CsZScore(Sub(Quantile($returns, 30, 0.9), Quantile($returns, 30, 0.1)))"], [6, 0.00363, "short_term_reversal_vol", "Neg(CsZScore(Div(Return($close, 5), Std($returns, 5))))"], [6, 0.00117, "overnight_gap_vol", "CsZScore(Div(Sub(Div($open, Delay($close, 1)), 1), Std($returns, 10)))"], [6, 0.00281, "close_location_volume", "CsZScore(Mul(Sub(Div(Sub($close, $low), Sub($high, $low)), 0.5), Div(Sub($volume, Mean($vo"], [6, 0.00632, "open_location_range", "CsRank(Sub(Div(Sub($open, $low), Sub($high, $low)), 0.5))"], [6, 0.00437, "intraday_drift", "CsZScore(Div(TsLinRegSlope(Sub($close, $open), 15), Std(Sub($close, $open), 15)))"], [6, 0.00158, "volume_return_residual", "CsZScore(Resid($returns, $volume, 15))"], [6, 4e-05, "high_low_quantile_spread", "CsRank(Div(Sub(Quantile($high, 40, 0.9), Quantile($low, 40, 0.1)), Mean($close, 40)))"], [6, 0.0033, "drawdown_volume", "CsRank(Mul(Div(Sub($close, TsMax($close, 50)), TsMax($close, 50)), Div($volume, Mean($volu"], [7, 0.00042, "amihud_illiquidity_medium", "CsZScore(Neg(Div(Mean(Abs($returns), 20), Mean(Log($volume), 20))))"], [7, 0.00594, "intraday_overnight_spread_medium", "CsZScore(Sub(Mean(Sub(Div($close, $open), 1), 20), Mean(Sub(Div($open, Delay($close, 1)), "], [7, 0.00162, "volume_persistence_long", "CsRank(Sum(Greater($volume, Mean($volume, 20)), 60))"], [7, 0.0034, "volume_volatility_term_structure", "CsZScore(Div(Std($volume, 60), Std($volume, 20)))"], [7, 0.00306, "intraday_drift_range_long", "CsZScore(Div(Mean(Sub(Div($close, $open), 1), 60), Mean(Div(Sub($high, $low), $close), 60)"], [7, 0.00411, "volume_acceleration_short_long", "CsZScore(Div(Sub(Mean($volume, 10), Mean($volume, 60)), Mean($volume, 60)))"], [7, 0.0018, "return_volume_residual_medium", "CsZScore(Div(Resid($returns, $volume, 20), Std($returns, 20)))"], [7, 0.00028, "return_autocorr_medium", "CsZScore(Corr($returns, Delay($returns, 1), 20))"], [8, 0.00037, "close_location_value", "CsRank(Clip(Div(Sub($close, $low), Sub($high, $low)), -1, 1))"], [8, 0.00222, "range_volume_compression", "CsRank(Mul(Div($volume, Mean($volume, 20)), Clip(Sub(1, Div(Sub($high, $low), Mean(Sub($hi"], [8, 0.00466, "signed_volume_ewma", "CsRank(Div(Decay(Mul(Sign($returns), $volume), 5), Decay($volume, 5)))"], [8, 0.00071, "wide_range_persistence", "Neg(CsZScore(TsRank(Div(Sub($high, $low), Mean(Sub($high, $low), 20)), 60)))"], [8, 0.00535, "lower_wick_volume_reversal", "CsRank(Mul(Clip(Div(Sub(Min($open, $close), $low), Sub($high, $low)), -1, 1), Div($volume,"], [8, 0.00281, "upper_wick_volume_distribution", "Neg(CsRank(Mul(Clip(Div(Sub($high, Max($open, $close)), Sub($high, $low)), -1, 1), Div($vo"], [8, 0.00621, "volume_weighted_return_tail", "CsZScore(Sub(Quantile(Mul($returns, $volume), 20, 0.9), Quantile(Mul($returns, $volume), 2"], [8, 0.00363, "trend_rsquare_change", "CsRank(Sub(Rsquare($close, 20), Rsquare($close, 60)))"], [9, 0.00221, "overnight_intraday_divergence", "CsRank(Sub(Sub(Div($open, Delay($close, 1)), 1), Sub(Div($close, $open), 1)))"], [9, 0.00415, "return_range_intensity", "CsRank(Div($returns, Div(Sub($high, $low), $close)))"], [9, 0.00062, "range_compression", "Neg(CsRank(Div(Div(Sub($high, $low), $close), Mean(Div(Sub($high, $low), $close), 20))))"], [9, 0.0011, "price_volume_slope_divergence", "CsRank(Sub(Div(TsLinRegSlope($close, 20), Mean($close, 20)), Div(TsLinRegSlope($volume, 20"], [9, 0.00559, "reversal_low_vol_composite", "CsRank(Add(Neg(Sub(Div($close, Delay($close, 5)), 1)), Neg(Std($returns, 20))))"], [9, 0.00588, "illiquidity_amihud", "CsRank(Div(Mean(Abs($returns), 20), Mean($volume, 20)))"], [9, 0.00156, "idiosyncratic_vol_residual", "Neg(CsZScore(Std(Resid($returns, $volume, 20), 20)))"], [9, 0.00548, "skip5_momentum", "CsRank(Sub(Div(Delay($close, 5), Delay($close, 60)), 1))"], [10, 0.00232, "low_gap_volatility", "Neg(CsZScore(Std(Sub(Div($open, Delay($close, 1)), 1), 20)))"], [10, 0.00344, "return_autocorr", "CsRank(Corr($returns, Delay($returns, 1), 30))"], [10, 0.00775, "overnight_gap_trend", "CsRank(TsLinRegSlope(Sub(Div($open, Delay($close, 1)), 1), 10))"], [10, 0.00244, "volume_autocorr", "CsRank(Corr(CsZScore($volume), Delay(CsZScore($volume), 1), 60))"], [10, 0.00383, "intraday_overnight_residual", "CsZScore(Resid(Sub(Div($close, $open), 1), Sub(Div($open, Delay($close, 1)), 1), 15))"], [10, 0.00037, "close_range_location", "Neg(CsRank(Div(Sub($close, $low), Sub($high, $low))))"], [10, 0.00336, "normalized_intraday_momentum", "CsRank(Div(Sub($close, $open), Sub($high, $low)))"], [10, 0.00198, "gap_to_range", "CsZScore(Div(Sub(Div($open, Delay($close, 1)), 1), Div(Sub($high, $low), $close)))"], [11, 0.0046, "one_day_reversal", "Neg(CsRank($returns))"], [11, 0.00684, "momentum_60_10", "CsRank(Sub(Return($close, 60), Return($close, 10)))"], [11, 0.00056, "low_intraday_range_20", "Neg(CsRank(Div(Mean(Sub($high, $low), 20), $close)))"], [11, 0.00011, "amihud_illiquidity_20", "CsRank(Div(Mean(Abs($returns), 20), Mean(Log($volume), 20)))"], [11, 0.00608, "vwap_deviation_5", "CsRank(Sub(Div($close, Div(Sum(Mul($close, $volume), 5), Sum($volume, 5))), 1))"], [11, 0.00019, "low_turnover_250", "Neg(CsZScore(Div($volume, Mean($volume, 250))))"], [11, 0.00037, "intraday_close_location", "CsRank(Div(Sub($close, $low), Sub($high, $low)))"], [11, 0.00154, "signed_volume_surprise", "CsRank(Mul(Sign($returns), Div(Sub($volume, Mean($volume, 20)), Std($volume, 20))))"], [12, 0.00648, "volume_weighted_return_momentum", "CsRank(Div(Sum(Mul($returns, $volume), 20), Sum($volume, 20)))"], [12, 0.00622, "intraday_return_momentum", "CsRank(Sum(Sub(Div($close, $open), 1), 10))"], [12, 0.00203, "volume_weighted_return_dispersion", "CsZScore(Std(Mul($returns, Div($volume, Mean($volume, 20))), 20))"], [12, 0.00016, "return_acceleration", "CsRank(Div(Delta($returns, 1), Std($returns, 20)))"], [12, 0.00078, "tail_return_spread", "CsZScore(Sub(Quantile($returns, 20, 0.9), Quantile($returns, 20, 0.1)))"], [12, 0.00231, "intraday_range_volume", "CsRank(Mul(Div(Sub($close, $low), Sub($high, $low)), Div($volume, Mean($volume, 20))))"], [12, 0.00911, "cumulative_max_drawdown", "CsRank(Div(Sub($close, CumMax($close)), CumMax($close)))"], [12, 0.0018, "price_volume_residual", "CsZScore(Div(Resid($returns, $volume, 20), Std($returns, 20)))"], [13, 0.00638, "five_day_reversal", "Neg(CsRank(LogReturn($close, 5)))"], [13, 0.00744, "vwap_location", "CsRank(Sub(Div($close, Div(Mean(Mul($close, $volume), 20), Mean($volume, 20))), 1))"], [13, 0.00037, "close_location", "CsRank(Div(Sub($close, $low), Sub($high, $low)))"], [13, 0.00855, "price_volume_rank_divergence", "Neg(CsRank(Sub(TsRank($close, 20), TsRank($volume, 20))))"], [13, 0.00287, "volume_surprise_reversal", "CsRank(Mul($returns, Clip(Div(Sub($volume, Mean($volume, 20)), Std($volume, 20)), -3, 3)))"], [13, 0.00169, "volume_acceleration", "CsRank(Sub(Clip(Div(Sub($volume, Mean($volume, 20)), Std($volume, 20)), -3, 3), Delay(Clip"], [13, 0.00569, "downside_volume_share", "Neg(CsRank(Div(Mean(IfElse(Less($returns, 0), $volume, 0), 20), Mean($volume, 20))))"], [13, 0.00657, "volume_residual", "CsRank(Resid(Log($volume), $returns, 20))"], [14, 0.00363, "intraday_close_drift", "CsRank(Div(Sub($close, $open), $open))"], [14, 0.00354, "volume_backed_intraday_drift", "CsRank(Mul(Div(Sub($close, $open), $open), Div($volume, Mean($volume, 20))))"], [14, 0.00411, "ten_day_range_position", "CsRank(Div(Sub($close, TsMin($low, 10)), Sub(TsMax($high, 10), TsMin($low, 10))))"], [14, 0.00275, "intraday_shadow_asymmetry", "CsRank(Sub(Sub($high, Max($open, $close)), Sub(Min($open, $close), $low)))"], [14, 0.0014, "range_volume_corr_20", "CsRank(Corr(Sub($high, $low), $volume, 20))"], [14, 0.00603, "return_range_flow_20", "CsRank(Mean(Mul($returns, Sub($high, $low)), 20))"], [14, 0.00156, "intraday_drift_autocorr_20", "CsRank(Corr(Div(Sub($close, $open), $open), Delay(Div(Sub($close, $open), $open), 1), 20))"], [14, 0.00506, "volume_weighted_intraday_drift_5", "CsRank(Div(Sum(Mul(Div(Sub($close, $open), $open), $volume), 5), Sum($volume, 5)))"], [15, 0.00183, "overnight_gap_range", "CsRank(Div(Sub($open, Delay($close, 1)), Sub($high, $low)))"], [15, 0.00336, "intraday_path_reversal", "Neg(CsRank(Div(Sub($close, $open), Sub($high, $low))))"], [15, 0.00185, "volume_shock_reversal", "Neg(CsRank(Div(Delta($volume, 1), Mean($volume, 20))))"], [15, 0.00113, "prior_gap_fill_range", "CsRank(Div(Sub(Delay($close, 1), $open), Sub(Delay($high, 1), Delay($low, 1))))"], [15, 0.00191, "return_tail_spread", "CsRank(Sub(Quantile($returns, 40, 0.9), Quantile($returns, 40, 0.1)))"], [15, 0.00028, "return_autocorrelation_reversal", "Neg(CsRank(Corr($returns, Delay($returns, 1), 20)))"], [15, 0.00093, "range_expansion_reversal", "Neg(CsRank(Div(Sub($high, $low), Mean(Sub($high, $low), 60))))"], [15, 0.00594, "signed_volume_imbalance", "CsRank(Sub(Decay(IfElse(Greater($returns, 0), $volume, 0), 10), Decay(IfElse(Less($returns"], [16, 0.0128, "dollar_volume_liquidity", "Neg(CsRank(Mul($volume, $close)))"], [16, 0.00616, "five_day_reversal", "Neg(CsRank(Return($close, 5)))"], [16, 0.00315, "open_gap_momentum", "CsRank(Sub(Div($open, Delay($close, 1)), 1))"], [16, 0.00557, "relative_volume_reversal", "Neg(CsRank(Div($volume, Mean($volume, 20))))"], [16, 0.00464, "quiet_volume_reversal", "Neg(CsRank(Mul(Div($volume, Mean($volume, 60)), Exp(Neg(Mul(10, Abs($returns)))))))"], [16, 0.00767, "range_adjusted_volume_reversal", "Neg(CsRank(Div(Mul($volume, $close), Mean(Sub($high, $low), 20))))"], [16, 0.00378, "vwap_deviation_momentum", "CsRank(Sub(Div($close, Div(Sum(Mul($close, $volume), 60), Sum($volume, 60))), 1))"], [16, 0.00028, "returns_autocorr_reversal", "Neg(CsRank(Corr($returns, Delay($returns, 1), 20)))"], [17, 0.00662, "amihud_illiquidity_20", "Neg(CsRank(Mean(Div(Abs($returns), Add($volume, 1)), 20)))"], [17, 0.00037, "close_location_range", "CsRank(Div(Sub($close, $low), Sub($high, $low)))"], [17, 0.00323, "daily_range_dispersion", "Neg(CsRank(Div(Sub($high, $low), $close)))"], [17, 0.00447, "return_volume_corr_20", "CsZScore(Corr($returns, $volume, 20))"], [17, 0.00323, "overnight_gap_reversal", "Neg(CsRank(Div(Sub($open, Delay($close, 1)), Delay($close, 1))))"], [17, 0.00109, "volume_autocorr_20", "CsZScore(Corr($volume, Delay($volume, 1), 20))"], [17, 0.00011, "volume_trend_relative_20", "CsZScore(Div(TsLinRegSlope(Log($volume), 20), Mean(Log($volume), 20)))"], [17, 0.00229, "range_expansion_1", "Neg(CsRank(Div(Sub($high, $low), Delay(Sub($high, $low), 1))))"], [18, 0.00272, "volume_weighted_price_location", "Neg(CsZScore(Div(Mul($volume, Sub($close, TsMin($low, 20))), Mul(Mean($volume, 20), Sub(Ts"], [18, 0.00268, "directional_volume_shock", "CsRank(Mul(Sub(Div(Sub($volume, Mean($volume, 5)), Std($volume, 5)), Div(Sub($volume, Mean"], [18, 0.00689, "volume_intraday_close_open_efficiency", "CsRank(Div(Sum(Mul($volume, Sub($close, $open)), 10), Sum(Mul($volume, Sub($high, $low)), "], [18, 0.0063, "up_down_volume_ratio", "CsRank(Div(Sub(Sum(Mul(Greater($returns, 0), $volume), 10), Sum(Mul(Less($returns, 0), $vo"], [18, 0.00087, "volume_spike_recency_vs_low", "CsRank(Sub(TsArgMax($volume, 20), TsArgMin($low, 20)))"], [18, 0.00631, "vwap_deviation_reversal", "Neg(CsRank(Sub(Div(Sum(Mul($close, $volume), 20), Sum($volume, 20)), $close)))"], [18, 0.00034, "volume_return_magnitude_trend", "CsRank(Neg(Div(Slope(Mul($volume, Abs($returns)), 20), Mean(Mul($volume, Abs($returns)), 2"], [18, 0.00083, "kurtosis_volume_regime", "CsNeutralize(Mul(Kurt($returns, 60), Sign(Sub($volume, Mean($volume, 20)))))"], [19, 0.01076, "amihud_illiquidity", "Neg(CsZScore(Mean(Div(Abs($returns), Mul($volume, $close)), 10)))"], [19, 0.00323, "overnight_gap_reversal", "Neg(CsRank(Div(Sub($open, Delay($close, 1)), Delay($close, 1))))"], [19, 0.0058, "close_location_value", "CsRank(Mean(Div(Sub($close, $low), Sub($high, $low)), 5))"], [19, 5e-05, "range_expansion_reversal", "Neg(CsRank(Div(Sub($high, $low), Mean(Sub($high, $low), 20))))"], [19, 0.00518, "volume_shock_reversal", "Neg(CsZScore(Div(Delta($volume, 3), Mean($volume, 20))))"], [19, 0.00134, "dollar_volume_activity_shock", "Neg(CsZScore(Div(Sub(Mul($volume, $close), Delay(Mul($volume, $close), 1)), Std(Mul($volum"], [19, 0.00412, "return_range_reversal", "Neg(CsRank(Div(Sub($close, Delay($close, 1)), Sub($high, $low))))"], [19, 0.00042, "trend_efficiency", "CsRank(Div(Slope($returns, 20), Std($returns, 20)))"], [20, 0.00363, "intraday_drift_return", "CsRank(Sub(Div($close, $open), 1))"], [20, 0.00315, "overnight_gap_reversal", "Neg(CsRank(Sub(Div($open, Delay($close, 1)), 1)))"], [20, 0.00336, "intraday_efficiency", "CsRank(Clip(Div(Sub($close, $open), Sub($high, $low)), -1, 1))"], [20, 0.00775, "vwap_price_deviation", "CsZScore(Sub(Div($close, Div(Sum(Mul($volume, $close), 20), Sum($volume, 20))), 1))"], [20, 0.00836, "signed_dollar_flow_5d", "Neg(CsRank(Div(Sum(Mul(Mul($returns, $volume), $close), 5), Sum(Mul($volume, $close), 5)))"], [20, 0.00028, "roll_illiquidity", "Neg(CsRank(Corr($returns, Delay($returns, 1), 20)))"], [20, 0.00537, "short_term_reversal_2d", "Neg(CsRank(Return($close, 2)))"], [20, 0.00045, "sixty_day_high_proximity", "CsRank(Div(Sub($close, TsMax($close, 60)), TsMax($close, 60)))"], [21, 0.00037, "close_location_intraday", "CsRank(Div(Sub($close, $low), Sub($high, $low)))"], [21, 0.00323, "overnight_gap_reversal", "Neg(CsRank(Div(Sub($open, Delay($close, 1)), Delay($close, 1))))"], [21, 0.00185, "volume_surprise_50", "CsZScore(Div(Sub($volume, Mean($volume, 50)), Std($volume, 50)))"], [21, 0.00363, "intraday_drift", "CsRank(Div(Sub($close, $open), $open))"], [21, 0.00101, "volume_trend_30", "CsRank(TsLinRegSlope(Log($volume), 30))"], [21, 0.00107, "price_quantile_spread_20", "CsRank(Div(Sub(Quantile($close, 20, 0.8), Quantile($close, 20, 0.2)), Mean($close, 20)))"], [21, 0.00618, "concave_return_flow_10", "CsRank(Div(Sum(SignedPower($returns, 0.5), 10), Std($returns, 10)))"], [21, 0.00662, "amihud_illiquidity_20", "Neg(CsRank(Mean(Div(Abs($returns), $volume), 20)))"], [22, 0.00037, "close_location_pressure", "CsRank(Div(Sub($close, Div(Add($high, $low), 2)), Add(Sub($high, $low), 1e-08)))"], [22, 0.00414, "return_range_efficiency", "CsRank(Div($returns, Add(Div(Sub($high, $low), $close), 1e-08)))"], [22, 0.00208, "overnight_intraday_divergence", "CsRank(Sub(Div(Sub($open, Delay($close, 1)), Add(Delay($close, 1), 1e-08)), Div(Sub($close"], [22, 0.00037, "upper_lower_shadow_ratio", "CsZScore(Div(Sub($high, $close), Add(Sub($close, $low), 1e-08)))"], [22, 0.00259, "decayed_intraday_drift", "CsRank(Div(Decay(Sub($close, $open), 5), Add(Decay(Sub($high, $low), 5), 1e-08)))"], [22, 0.00209, "conditional_shadow_pressure", "CsRank(Div(IfElse(Greater($close, $open), Sub($high, $close), Sub($close, $low)), Add(Sub("], [22, 0.0088, "cumulative_high_distance", "Neg(CsRank(Div($close, Add(CumMax($close), 1e-08))))"], [22, 0.00279, "close_location_trend", "CsRank(TsLinRegSlope(Div(Sub($close, Div(Add($high, $low), 2)), Add(Sub($high, $low), 1e-0"], [23, 0.00335, "signed_volume_change_return", "CsZScore(Mul($returns, Div(Delta($volume, 1), Add(Delay($volume, 1), 1e-08))))"], [23, 0.00317, "open_close_pressure_volume_z", "CsZScore(Mul(Div(Sub($close, $open), Add(Sub($high, $low), 1e-08)), Div(Sub($volume, Mean("], [23, 0.00252, "overnight_gap_relative_volume", "CsZScore(Mul(Div(Sub($open, Delay($close, 1)), Add(Delay($close, 1), 1e-08)), Div($volume,"], [23, 0.00887, "volume_weighted_return_decay", "CsRank(Div(Decay(Mul($returns, $volume), 10), Add(Decay($volume, 10), 1e-08)))"], [23, 0.00156, "upper_shadow_volume_pressure", "Neg(CsZScore(Mul(Div(Sub($high, Max($open, $close)), Add(Sub($high, $low), 1e-08)), Div(Su"], [23, 0.00135, "recent_low_volume_reversal", "CsRank(Mul(Sub(20, TsArgMin($low, 20)), Div($volume, Add(Mean($volume, 20), 1e-08))))"], [23, 0.00207, "high_volume_price_rank_reversal", "Neg(CsRank(Mul(TsRank($volume, 20), TsRank($close, 20))))"], [23, 0.00088, "signed_volume_range_position", "CsZScore(Mul(Sign($returns), Div(Sub($volume, TsMin($volume, 20)), Add(Sub(TsMax($volume, "], [24, 0.00603, "overnight_intraday_spread", "CsRank(Sub(Mean(Return($open, 1), 20), Mean(Div(Sub($close, $open), Add(Abs($open), 1e-08)"], [24, 0.00423, "intraday_drift_slope", "CsRank(TsLinRegSlope(Div(Sub($close, $open), Add(Abs($open), 1e-08)), 15))"], [24, 0.003, "open_prev_range_position", "CsRank(Div(Sub($open, Delay($low, 1)), Add(Sub(Delay($high, 1), Delay($low, 1)), 1e-08)))"], [24, 0.00481, "gap_trend", "CsRank(TsLinRegSlope(Return($open, 1), 10))"], [24, 0.0014, "volume_range_correlation", "CsRank(Corr($volume, Sub($high, $low), 20))"], [24, 0.00025, "indecision_range_net", "Neg(CsRank(Mean(Clip(Div(Sub($high, $low), Add(Abs(Sub($close, $open)), 1e-08)), 0, 10), 1"], [24, 0.00021, "range_expansion", "CsZScore(Div(Std(Sub($high, $low), 5), Add(Std(Sub($high, $low), 40), 1e-08)))"], [24, 0.00228, "intraday_residual_overnight", "CsRank(Resid(Div(Sub($close, $open), Add(Abs($open), 1e-08)), Return($open, 1), 20))"], [25, 0.00648, "dollar_flow_persistence", "CsRank(Div(Sum(Mul($returns, $volume), 20), Add(Sum($volume, 20), 1e-08)))"], [25, 0.00662, "amihud_illiquidity", "Neg(CsRank(Mean(Div(Abs($returns), Add($volume, 1e-08)), 20)))"], [25, 0.00231, "close_location_volume", "CsRank(Mul(Div(Sub($close, $low), Add(Sub($high, $low), 1e-08)), Div($volume, Add(Mean($vo"], [25, 0.00072, "overnight_gap_volume", "CsRank(Mul(Sub(Div($open, Add(Delay($close, 1), 1e-08)), 1), Div($volume, Add(Mean($volume"], [25, 0.0018, "return_volume_residual", "CsZScore(Div(Resid($returns, $volume, 20), Add(Std($returns, 20), 1e-08)))"], [25, 0.00588, "dollar_volatility_risk", "Neg(CsRank(Div(Sum(Mul(Square($returns), $volume), 10), Add(Sum($volume, 10), 1e-08))))"], [25, 0.00227, "range_expansion", "CsRank(Div(Sub(Delta(TsMax($high, 20), 5), Delta(TsMin($low, 20), 5)), Add($close, 1e-08))"], [25, 0.00911, "cumulative_drawdown_reversal", "Neg(CsRank(Div(Sub($close, CumMax($close)), Add(CumMax($close), 1e-08))))"], [26, 0.00444, "gap_volume_informed", "CsRank(Mul(CsZScore(Sub(Div($open, Delay($close, 1)), 1)), CsZScore(Div($volume, Median($v"], [26, 0.00273, "volume_shock_persistence", "CsRank(Mul(Div($volume, Quantile($volume, 60, 0.9)), Delay(Div($volume, Quantile($volume, "], [26, 0.00095, "range_volume_absorption", "CsRank(Mul(Sub(Div($volume, Mean($volume, 20)), 1), Neg(Delta(Sub($high, $low), 5))))"], [26, 0.00464, "turnover_stability_ratio", "CsRank(Neg(Div(Div(Std($volume, 20), Mean($volume, 20)), Std($returns, 20))))"], [26, 0.00302, "gap_fill_direction", "CsRank(Tanh(Div(Sub($close, $open), Add(Sub($open, Delay($close, 1)), 1e-08))))"], [26, 0.00368, "close_location_return", "CsRank(Mul(Sub(Div(Sub($close, $low), Add(Sub($high, $low), 1e-08)), 0.5), $returns))"], [26, 0.00156, "unexpected_volume_range", "CsRank(Resid($volume, Sub($high, $low), 60))"], [26, 0.00689, "volume_price_peak_lag", "CsRank(Sub(TsArgMax($close, 60), TsArgMax($volume, 60)))"], [27, 0.00833, "dollar_flow_decay", "CsRank(Div(Decay(Mul($returns, Mul($volume, $close)), 20), Mean(Mul($volume, $close), 20))"], [27, 0.00158, "price_liquidity_return_divergence", "CsRank(Sub(Return($close, 30), Return(Mul($volume, $close), 30)))"], [27, 0.00731, "price_liquidity_rank_gap", "CsRank(Sub(CsRank($close), CsRank(Mul($volume, $close))))"], [27, 0.00325, "active_turnover_volatility", "CsZScore(Div(Mean(Mul(Abs($returns), $volume), 60), Mean($volume, 60)))"], [27, 0.00587, "liquidity_adjusted_price_impact", "CsRank(Div(Delta($close, 5), Delta(Mul($volume, $close), 5)))"], [27, 0.00321, "abnormal_return_liquidity", "CsRank(Resid($returns, Log(Mul($volume, $close)), 60))"], [27, 0.00957, "close_location_dollar_volume", "CsRank(Mul(Div(Sub($close, $low), Sub($high, $low)), CsRank(Mul($volume, $close))))"], [27, 0.00411, "dollar_volume_coefficient_of_variation", "CsZScore(Div(Std(Mul($volume, $close), 20), Mean(Mul($volume, $close), 20)))"], [28, 0.00308, "intraday_efficiency_t", "CsRank(Div(Mean(Div(Sub($close, $open), Sub($high, $low)), 20), Std(Div(Sub($close, $open)"], [28, 0.00471, "relative_volume_range_surprise", "CsRank(Div(Mul($volume, Mean(Sub($high, $low), 20)), Mul(Mean($volume, 20), Sub($high, $lo"], [28, 0.00802, "open_location_reversal", "Neg(CsRank(Mean(Div(Sub($open, $low), Sub($high, $low)), 10)))"], [28, 0.00075, "range_shock_z", "Neg(CsZScore(Div(Sub(Div(Sub($high, $low), $close), Mean(Div(Sub($high, $low), $close), 20"], [28, 5e-05, "chaikin_money_flow", "CsRank(Div(Sum(Mul(Div(Sub(Sub($close, $low), Sub($high, $close)), Sub($high, $low)), $vol"], [28, 0.00648, "volume_weighted_return", "CsRank(Div(Sum(Mul($returns, $volume), 20), Sum($volume, 20)))"], [28, 0.00203, "breakout_volume_ratio", "CsRank(Div(IfElse(Greater($close, TsMax(Delay($close, 1), 20)), $volume, 0), Mean($volume,"], [28, 0.0014, "volume_range_corr", "Neg(CsZScore(Corr($volume, Sub($high, $low), 20)))"], [29, 0.0041, "close_location_range", "CsRank(Mean(Div(Sub($close, Add($high, $low)), Sub($high, $low)), 5))"], [29, 0.00474, "signed_intraday_volume", "CsRank(Sum(Mul(Sign(Sub($close, $open)), $volume), 10))"], [29, 9e-05, "range_compression_reversal", "CsRank(Neg(Div(Mean(Div(Sub($high, $low), $close), 20), Mean(Div(Sub($high, $low), $close)"], [29, 0.00557, "close_volume_comovement", "CsZScore(Corr(Div($close, $open), $volume, 20))"], [29, 0.00122, "volume_wma_sma_acceleration", "CsZScore(Sub(WMA($volume, 10), SMA($volume, 10)))"], [29, 0.00419, "range_return_efficiency", "CsRank(Mean(Div(Abs($returns), Div(Sub($high, $low), $close)), 5))"], [29, 0.00077, "volume_quantile_dispersion", "CsScale(Div(Quantile($volume, 20, 0.8), Quantile($volume, 20, 0.2)))"], [29, 0.00127, "volume_median_mean_skew", "CsDemean(Sub(Median($volume, 20), Mean($volume, 20)))"], [30, 0.00027, "volume_weighted_close_location", "CsZScore(Mul(Div($volume, Mean($volume, 20)), Div(Sub($close, Div(Add($high, $low), 2)), S"], [30, 0.00117, "range_liquidity_shock", "CsRank(Div(Div(Sub($high, $low), $close), Add(Div($volume, Mean($volume, 20)), 1)))"], [30, 0.00318, "close_location_volume_change", "CsRank(Mul(Div(Sub($close, Div(Add($high, $low), 2)), Sub($high, $low)), Sub($volume, Dela"], [30, 0.00244, "volume_range_shock", "CsRank(Mul(Sub($volume, Delay($volume, 1)), Div(Sub($high, $low), $close)))"], [30, 0.00446, "close_location_trend", "CsZScore(TsLinRegSlope(Div(Sub($close, Div(Add($high, $low), 2)), Sub($high, $low)), 20))"], [30, 0.00749, "gap_intraday_pressure", "CsRank(Mul(Sub(Div($open, Delay($close, 1)), 1), Div(Sub($close, $open), Sub($high, $low))"], [30, 0.00407, "return_impact_liquidity", "CsZScore(Div(Abs($returns), Add(Div($volume, Mean($volume, 20)), 1)))"], [30, 0.00086, "close_location_range_pressure", "CsRank(Mul(Div(Sub($close, Div(Add($high, $low), 2)), Sub($high, $low)), Div(Sub($high, $l"], [31, 0.00642, "short_term_reversal", "Neg(CsRank(Sum($returns, 5)))"], [31, 0.0053, "medium_term_momentum", "CsRank(Sub(Sum($returns, 60), Sum($returns, 5)))"], [31, 0.00745, "volume_weighted_reversal", "Neg(CsZScore(Div(Sum(Mul($returns, $volume), 10), Sum($volume, 10))))"], [31, 0.0034, "volume_flow_shock", "CsZScore(Mul(Sign($returns), Return($volume, 1)))"], [31, 0.0044, "volume_weighted_range", "CsRank(Div(WMA(Mul(Sub($high, $low), $volume), 20), WMA($volume, 20)))"], [31, 0.0016, "return_dispersion", "CsRank(Sub(Quantile($returns, 20, 0.8), Quantile($returns, 20, 0.2)))"], [31, 0.00227, "price_52w_position", "CsRank(Div($close, TsMax($close, 120)))"], [31, 0.00037, "volume_trend_ratio", "CsRank(Div(Decay($volume, 10), Decay($volume, 60)))"], [32, 0.00347, "avg_intraday_close_location", "CsRank(Clip(Div(Sub(Mean($close, 5), Mean($low, 5)), Mean(Sub($high, $low), 5)), 0, 1))"], [32, 0.00332, "relative_range_volume_impact", "CsDemean(Div(Div(Sub($high, $low), $close), Div($volume, Mean($volume, 20))))"], [32, 0.00281, "intraday_return_range_efficiency", "CsZScore(Tanh(Div(Mean(Abs(Sub(Div($close, $open), 1)), 10), Mean(Sub($high, $low), 10))))"], [32, 0.00145, "gap_intraday_location", "CsRank(Mul(Sub(Div($open, Delay($close, 1)), 1), Div(Sub($close, $low), Sub($high, $low)))"], [32, 0.00196, "dollar_range_surprise", "CsZScore(Div(Sub(Mul($volume, Sub($high, $low)), Mean(Mul($volume, Sub($high, $low)), 20))"], [32, 4e-05, "volume_weighted_close_location", "CsRank(Div(Sum(Mul($volume, Div(Sub($close, $low), Sub($high, $low))), 20), Sum($volume, 2"], [32, 0.00213, "intraday_return_reversal", "Neg(CsRank(Mean(Sub(Div($close, $open), 1), 5)))"], [32, 0.00424, "close_location_slope", "CsRank(TsLinRegSlope(Div(Sub($close, $low), Sub($high, $low)), 20))"], [33, 0.00801, "vwap_price_position", "CsRank(Sub(Div($close, Div(Sum(Mul($close, $volume), 10), Sum($volume, 10))), 1))"], [33, 0.00373, "abnormal_volume_residual", "CsZScore(Resid(Return($volume, 1), $returns, 20))"], [33, 0.00692, "gap_intraday_reversal", "CsRank(Mul(Sub(Div($open, Delay($close, 1)), 1), Neg(Sub(Div($close, $open), 1))))"], [33, 0.00357, "lower_shadow_strength", "CsRank(Div(Sub(Min($open, $close), $low), Sub($high, $low)))"], [33, 0.00192, "volume_persistence", "CsZScore(Corr($volume, Delay($volume, 1), 10))"], [33, 0.00295, "volume_skewness", "CsZScore(Skew($volume, 40))"], [33, 0.00363, "intraday_reversal", "Neg(CsRank(Sub(Div($close, $open), 1)))"], [33, 0.00271, "return_autocorrelation", "CsZScore(Corr($returns, Delay($returns, 1), 10))"], [34, 0.00271, "short_term_reversal", "Neg(CsRank(Div(Return($close, 5), Std($returns, 60))))"], [34, 0.00406, "long_term_momentum", "CsRank(LogReturn($close, 60))"], [34, 0.00374, "low_volatility", "Neg(CsRank(Std($returns, 250)))"], [34, 0.00817, "dollar_illiquidity", "CsRank(Div(Sum(Abs($returns), 250), Sum(Mul($volume, $close), 250)))"], [34, 4e-05, "money_flow_clv", "CsRank(Div(Sum(Mul($volume, Div(Sub($close, $low), Sub($high, $low))), 20), Sum($volume, 2"], [34, 0.00648, "volume_weighted_momentum", "CsRank(Div(Sum(Mul($volume, $returns), 20), Sum($volume, 20)))"], [34, 0.00221, "intraday_overnight_spread", "CsRank(Sub(Div(Sub($close, $open), $open), Sub(Div($open, Delay($close, 1)), 1)))"], [34, 0.01224, "year_range_position", "CsRank(Div(Sub($close, TsMin($low, 250)), Sub(TsMax($high, 250), TsMin($low, 250))))"], [35, 0.00127, "flow_acceleration", "CsZScore(Mul(Sub($returns, Delay($returns, 1)), Div($volume, Mean($volume, 20))))"], [35, 0.00231, "close_location_volume", "CsRank(Mul(Div(Sub($close, $low), Sub($high, $low)), Div($volume, Mean($volume, 20))))"], [35, 0.00072, "gap_volume_info", "CsRank(Mul(Sub(Div($open, Delay($close, 1)), 1), Div($volume, Mean($volume, 20))))"], [35, 0.00233, "volume_weighted_return_convexity", "CsZScore(Div(Sum(Mul($volume, Mul($returns, $returns)), 20), Sum($volume, 20)))"], [35, 0.00841, "illiquidity_shock", "CsZScore(Div(Mean(Div(Abs($returns), Mul($volume, $close)), 5), Mean(Div(Abs($returns), Mu"], [35, 0.00535, "downside_flow_ratio", "Neg(CsZScore(Div(Sum(Mul(Less($returns, 0), $volume), 20), Sum($volume, 20))))"], [35, 0.00324, "range_return_efficiency", "CsZScore(Mean(Div(Abs($returns), Sub($high, $low)), 10))"], [35, 0.0032, "volume_peak_timing", "CsZScore(Mul(TsArgMax($volume, 20), Sub(Div($close, $open), 1)))"], [36, 0.00344, "lagged_return_reversal", "Neg(CsRank(Delay($returns, 1)))"], [36, 0.00345, "intraday_close_pressure_decay", "CsRank(Decay(Div(Sub($close, $open), $close), 5))"], [36, 0.00437, "hma_range_compression", "CsRank(Neg(Div(HMA(Sub($high, $low), 20), $close)))"], [36, 0.00406, "volume_log_delta_surprise", "CsZScore(Div(Delta(Log($volume), 5), Mean(Log($volume), 20)))"], [36, 0.00031, "turnover_log_slope", "CsRank(TsLinRegSlope(Log(Div($volume, $close)), 30))"], [36, 0.00078, "return_quantile_spread", "CsZScore(Sub(Quantile($returns, 20, 0.9), Quantile($returns, 20, 0.1)))"], [36, 0.00799, "prior_high_proximity", "CsRank(Div($close, Delay(TsMax($close, 250), 1)))"], [36, 0.00168, "kama_momentum_gap", "CsRank(Div(Sub($close, KAMA($close, 30)), $close))"]]};
+const COV = {"rows": [[2, 0.591, 3, 0], [3, 0.71, 2, 0], [4, 0.798, 2, 2], [5, 0.708, 3, 3], [6, 0.686, 2, 1], [7, 0.609, 3, 1], [8, 0.748, 3, 3], [9, 0.928, 0, 5], [10, 0.8, 2, 3], [11, 0.944, 0, 5], [12, 0.833, 0, 2], [13, 0.91, 0, 4], [14, 0.804, 0, 2], [15, 0.936, 0, 6], [16, 0.943, 0, 6], [17, 0.902, 1, 4], [18, 0.763, 1, 1], [19, 0.917, 0, 4], [20, 1.0, 0, 7], [21, 0.972, 0, 5], [22, 1.0, 1, 5], [23, 0.714, 1, 1], [24, 0.624, 2, 3], [25, 1.0, 1, 6], [26, 0.638, 3, 0], [27, 0.81, 1, 3], [28, 0.732, 1, 3], [29, 0.602, 2, 0], [30, 0.791, 0, 3], [31, 0.904, 0, 4], [32, 0.927, 0, 6], [33, 0.892, 1, 4], [34, 0.982, 0, 6], [35, 0.964, 0, 7], [36, 0.956, 0, 6]], "clusters": 57};
+(function(){
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const NS='http://www.w3.org/2000/svg';
+  function el(tag,attrs,parent){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e;}
+  function tip(host){const t=document.createElement('div');t.className='tip';t.hidden=true;host.appendChild(t);return t;}
+  function place(t,host,ev){const r=host.getBoundingClientRect();let x=ev.clientX-r.left+host.scrollLeft+12,y=ev.clientY-r.top+12;t.hidden=false;const w=t.offsetWidth;if(x+w>host.scrollWidth-4)x=Math.max(4,x-w-24);t.style.left=x+'px';t.style.top=y+'px';}
+  function axisText(g,x,y,s,anchor){const t=el('text',{x,y,'text-anchor':anchor||'middle','font-size':11,fill:css('--ink-3'),'font-family':'var(--f-mono)'},g);t.textContent=s;return t;}
+
+  function timeChart(){
+    const host=document.getElementById('c-time');const W=900,H=300,m={l:52,r:12,t:12,b:34};
+    const svg=el('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':'每轮生成、反思、评估耗时堆叠柱状图'},host);
+    const rows=D.times;const max=1200;const iw=W-m.l-m.r,ih=H-m.t-m.b;const bw=iw/rows.length;
+    const y=v=>m.t+ih-v/max*ih;
+    for(let v=0;v<=max;v+=300){el('line',{x1:m.l,x2:W-m.r,y1:y(v),y2:y(v),stroke:css('--rule'),'stroke-width':1},svg);axisText(svg,m.l-8,y(v)+4,v,'end');}
+    const t=tip(host);
+    rows.forEach((r,i)=>{const [it,g,rf,ev]=r;let base=0;const x=m.l+i*bw+bw*0.18,w=bw*0.64;
+      [[g,'--s1'],[rf,'--s2'],[ev,'--s3']].forEach(([v,c],k)=>{const h=v/max*ih;if(h<=0)return;const yy=y(base+v);
+        el('rect',{x,y:yy+(k?0:0),width:w,height:Math.max(0,h-(k<2?1.5:0)),fill:css(c),rx:k===2||(!ev&&k===1)?2:0},svg);base+=v;});
+      const hit=el('rect',{x:m.l+i*bw,y:m.t,width:bw,height:ih,fill:'transparent'},svg);
+      hit.addEventListener('mousemove',e=>{t.innerHTML=`<b>第 ${it} 轮</b><br>生成 ${g} s · 反思 ${rf} s · 评估 ${ev} s`;place(t,host,e);});
+      hit.addEventListener('mouseleave',()=>t.hidden=true);
+      if(it%5===0||it===1)axisText(svg,m.l+i*bw+bw/2,H-14,it);});
+    axisText(svg,m.l+iw/2,H-1,'轮次');
+  }
+
+  function barsH(id,data,fmt,label){
+    const host=document.getElementById(id);const W=900,rowH=30,m={l:200,r:70,t:6,b:6};const H=m.t+m.b+data.length*rowH;
+    const svg=el('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':label},host);
+    const max=Math.max(...data.map(d=>d[1]));const iw=W-m.l-m.r;
+    data.forEach((d,i)=>{const yy=m.t+i*rowH;const w=Math.max(2,d[1]/max*iw);
+      const lt=el('text',{x:m.l-10,y:yy+rowH/2+4,'text-anchor':'end','font-size':13,fill:css('--ink-2')},svg);lt.textContent=d[0];
+      el('rect',{x:m.l,y:yy+7,width:w,height:rowH-14,rx:3,fill:css(d[2]||'--s1')},svg);
+      const vt=el('text',{x:m.l+w+8,y:yy+rowH/2+4,'font-size':12.5,fill:css('--ink'),'font-family':'var(--f-mono)'},svg);vt.textContent=fmt(d[1]);});
+  }
+
+  function icChart(){
+    const host=document.getElementById('c-ic');const W=900,H=340,m={l:58,r:16,t:14,b:36};const iw=W-m.l-m.r,ih=H-m.t-m.b;
+    const svg=el('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':'288 个候选 |IC| 散点图'},host);
+    const ymax=0.024;const x=i=>m.l+(i-0.5)/36*iw;const y=v=>m.t+ih-v/ymax*ih;
+    for(let v=0;v<=0.0241;v+=0.004){el('line',{x1:m.l,x2:W-m.r,y1:y(v),y2:y(v),stroke:css('--rule')},svg);axisText(svg,m.l-8,y(v)+4,v.toFixed(3),'end');}
+    [1,5,10,15,20,25,30,36].forEach(i=>axisText(svg,x(i),H-16,i));axisText(svg,m.l+iw/2,H-2,'轮次');
+    el('line',{x1:m.l,x2:W-m.r,y1:y(0.0094),y2:y(0.0094),stroke:css('--ref'),'stroke-width':2,'stroke-dasharray':'5 4'},svg);
+    el('line',{x1:m.l,x2:W-m.r,y1:y(0.02),y2:y(0.02),stroke:css('--s2'),'stroke-width':2},svg);
+    const l1=el('text',{x:W-m.r-4,y:y(0.0094)-6,'text-anchor':'end','font-size':12,fill:css('--ink-2')},svg);l1.textContent='2 倍标准误 ≈ 0.0094';
+    const l2=el('text',{x:W-m.r-4,y:y(0.02)-6,'text-anchor':'end','font-size':12,fill:css('--ink-2')},svg);l2.textContent='入库门槛 0.02';
+    const t=tip(host);
+    const cnt={};
+    D.pts.forEach(p=>{const [it,ic,name,f]=p;cnt[it]=(cnt[it]||0)+1;const jx=(cnt[it]-4.5)*2.2;
+      const c=el('circle',{cx:x(it)+jx,cy:y(ic),r:4,fill:css('--s1'),'fill-opacity':.75,stroke:css('--paper'),'stroke-width':1.5},svg);
+      const hit=el('circle',{cx:x(it)+jx,cy:y(ic),r:8,fill:'transparent'},svg);
+      hit.addEventListener('mousemove',e=>{t.innerHTML=`<b>${name}</b> · 第 ${it} 轮 · |IC| ${ic.toFixed(4)}<br><span class="mono">${f.replace(/</g,'&lt;')}</span>`;place(t,host,e);c.setAttribute('r',6);});
+      hit.addEventListener('mouseleave',()=>{t.hidden=true;c.setAttribute('r',4);});});
+  }
+
+  function covChart(){
+    const host=document.getElementById('c-cov');if(!COV||!COV.rows)return;const W=900,H=300,m={l:52,r:16,t:14,b:36};const iw=W-m.l-m.r,ih=H-m.t-m.b;
+    const svg=el('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':'每轮候选与历史候选最大相关系数中位数'},host);
+    const x=i=>m.l+(i-1)/35*iw;const y=v=>m.t+ih-v*ih;
+    for(let v=0;v<=1.001;v+=0.25){el('line',{x1:m.l,x2:W-m.r,y1:y(v),y2:y(v),stroke:css('--rule')},svg);axisText(svg,m.l-8,y(v)+4,v.toFixed(2),'end');}
+    [2,5,10,15,20,25,30,36].forEach(i=>axisText(svg,x(i),H-16,i));axisText(svg,m.l+iw/2,H-2,'轮次');
+    const rows=COV.rows.filter(r=>r[1]!==null);
+    let d='';rows.forEach((r,k)=>{d+=(k?'L':'M')+x(r[0]).toFixed(1)+' '+y(r[1]).toFixed(1);});
+    el('path',{d,fill:'none',stroke:css('--s1'),'stroke-width':2},svg);
+    const t=tip(host);
+    rows.forEach(r=>{el('circle',{cx:x(r[0]),cy:y(r[1]),r:4,fill:css('--s1'),stroke:css('--paper'),'stroke-width':2},svg);
+      const hit=el('circle',{cx:x(r[0]),cy:y(r[1]),r:10,fill:'transparent'},svg);
+      hit.addEventListener('mousemove',e=>{t.innerHTML=`<b>第 ${r[0]} 轮</b><br>与历史最大 |ρ| 中位数 ${r[1].toFixed(2)}<br>8 个中新信号（|ρ|&lt;0.5）${r[2]} 个`;place(t,host,e);});
+      hit.addEventListener('mouseleave',()=>t.hidden=true);});
+    const last=rows[rows.length-1];const lt=el('text',{x:x(last[0])-6,y:y(last[1])-10,'text-anchor':'end','font-size':12,fill:css('--ink-2')},svg);lt.textContent='中位数 '+last[1].toFixed(2);
+  }
+
+  function draw(){
+    document.querySelectorAll('.chart').forEach(c=>c.innerHTML='');
+    timeChart();icChart();covChart();
+    barsH('c-think',[['含糊措辞',48.6],['历史/反馈',20.8],['语法/格式核对',11.8],['IC/强度',8.2],['方向/符号',7.1],['经济机制',4.4],['市场情境',0.3]],v=>v.toFixed(1),'生成思考内容构成');
+  }
+  draw();
+  try{matchMedia('(prefers-color-scheme: dark)').addEventListener('change',draw);}catch(e){}
+  try{new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}catch(e){}
+})();
+</script>
+
+<!--claude-mermaid-runtime-begin:3477-->
+<style>.mermaid-diagram{margin-block:4px}.mermaid-diagram svg{display:block;margin:0 auto;max-width:100%;height:auto}</style>
+<script src="/_runtime/mermaid-11.16.1.min.js"></script>
+<script>(function(){
+var CFG={"palettes":{"light":{"surface":"#f4efe4","text":"#42392e","line":"#8a7f6d","border":"#7a6c52","bg":"#fffdf8"},"dark":{"surface":"#262b34","text":"#f2f3f5","line":"#a8adb8","border":"#9aa4b8","bg":"#1f232b"}}};
+if(typeof mermaid==='undefined')return;
+var pres=Array.prototype.slice.call(document.querySelectorAll('pre.mermaid')).filter(function(p){if(p.hasAttribute('data-claude-mermaid-claimed'))return false;p.setAttribute('data-claude-mermaid-claimed','1');return true;});
+if(!pres.length)return;
+var mq=window.matchMedia?window.matchMedia('(prefers-color-scheme: dark)'):null;
+var root=document.documentElement;
+var items=pres.map(function(pre){
+var mount=document.createElement('div');mount.className='mermaid-diagram';
+return {pre:pre,mount:mount,src:pre.textContent||''};
+});
+var seq=0;
+var renderGen=0;
+var lastKey='';
+function pageBg(fallback){
+var els=[document.body,document.documentElement];
+for(var i=0;i<els.length;i++){
+var c=els[i]&&getComputedStyle(els[i]).backgroundColor;
+if(c&&c!=='transparent'&&c!=='rgba(0, 0, 0, 0)')return c;
+}
+return fallback;
+}
+function render(){
+var theme=root.getAttribute('data-theme');
+var dark=theme==='dark'||(!!(mq&&mq.matches)&&theme!=='light');
+var pal=dark?CFG.palettes.dark:CFG.palettes.light;
+var bg=pageBg(pal.bg);
+var key=(dark?'d':'l')+'|'+bg;
+if(key===lastKey)return;
+lastKey=key;
+var gen=++renderGen;
+var font=getComputedStyle(document.body).fontFamily||'sans-serif';
+var nat={useMaxWidth:false};
+mermaid.initialize({
+startOnLoad:false,securityLevel:'strict',theme:'base',
+flowchart:nat,sequence:nat,er:nat,state:nat,class:nat,pie:nat,
+gantt:nat,journey:nat,timeline:nat,gitGraph:nat,mindmap:nat,xyChart:nat,
+quadrantChart:nat,sankey:nat,c4:nat,requirement:nat,block:nat,
+packet:nat,kanban:nat,architecture:nat,radar:nat,
+themeVariables:{background:bg,mainBkg:pal.surface,primaryColor:pal.surface,
+primaryTextColor:pal.text,lineColor:pal.line,primaryBorderColor:pal.border,
+nodeBorder:pal.border,clusterBorder:pal.border,edgeLabelBackground:bg,
+clusterBkg:'rgba(127,127,127,0.07)',titleColor:pal.text,
+darkMode:dark,rowOdd:bg,rowEven:'rgba(127,127,127,0.07)',
+attributeBackgroundColorOdd:bg,attributeBackgroundColorEven:'rgba(127,127,127,0.07)',
+fontSize:'16px',fontFamily:font},
+themeCSS:'.node rect, .node circle, .node polygon, .node path, .cluster rect { stroke-width: 2px; }'
+});
+items.forEach(function(it){
+var id='claude-mermaid-'+seq++;
+mermaid.render(id,it.src).then(function(r){
+if(gen!==renderGen)return;
+var prev=it.pre.previousElementSibling;
+if(prev&&prev.className==='mermaid-diagram'&&prev!==it.mount)return;
+it.mount.innerHTML=r.svg;
+if(!it.mount.parentNode)it.pre.parentNode.insertBefore(it.mount,it.pre);
+it.pre.style.display='none';
+},function(){
+var scratch=document.getElementById(id);
+if(scratch)scratch.parentNode.removeChild(scratch);
+scratch=document.getElementById('d'+id);
+if(scratch)scratch.parentNode.removeChild(scratch);
+if(gen!==renderGen)return;
+if(it.mount.parentNode)it.mount.parentNode.removeChild(it.mount);
+it.pre.style.display='';
+});
+});
+}
+render();
+if(mq&&mq.addEventListener)mq.addEventListener('change',render);
+if(typeof MutationObserver!=='undefined')new MutationObserver(render).observe(root,{attributes:true,attributeFilter:['data-theme']});
+})();</script>
+<!--claude-mermaid-runtime-end-->
+
+</body></html>

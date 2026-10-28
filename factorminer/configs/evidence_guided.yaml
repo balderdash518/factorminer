@@ -1,0 +1,23 @@
+# Runnable offline demonstration. For real mining, copy memory.evidence_guided
+# into your existing dataset/provider config; do not replace those settings.
+llm:
+  provider: mock
+mining:
+  batch_size: 8
+  max_iterations: 3
+evaluation:
+  num_workers: 1
+memory:
+  evidence_guided:
+    enabled: true
+    reserve_candidates: 2
+    max_replacement_rounds: 2
+    history_limit: 6
+    match_limit: 3
+    max_context_chars: 8000
+    similarity_threshold: 0.65
+    review_enabled: true
+    max_review_calls: 2
+    max_review_candidates: 8
+    review_max_tokens: 2048
+    enable_embeddings: false

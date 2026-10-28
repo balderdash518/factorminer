@@ -95,6 +95,14 @@ class MiningSettings:
         return int(self._value("evaluation", "fast_screen_assets", 100))
 
     @property
+    def portfolio_checks(self) -> Any:
+        from factorminer.evaluation.portfolio_checks import PortfolioThresholds
+
+        return PortfolioThresholds.from_mapping(
+            self._value("evaluation", "portfolio_checks", None)
+        )
+
+    @property
     def num_workers(self) -> int:
         return int(self._value("evaluation", "num_workers", 1))
 

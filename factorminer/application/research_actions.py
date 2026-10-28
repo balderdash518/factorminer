@@ -246,7 +246,9 @@ class ResearchActionService:
         """
         action = payload.research_action["chosen"]
         kernel = self.loop.evaluation_kernel
-        data = kernel.build_data_dict(self.loop.data_tensor, get_features())
+        data = kernel.build_data_dict(
+            self.loop.data_tensor, getattr(self.loop, "feature_names", None) or get_features()
+        )
         panels = []
         for formula in (action["parent_formula"], action["formula"]):
             self._contact("delay_challenge", formula, payload.iteration, "dispatched")

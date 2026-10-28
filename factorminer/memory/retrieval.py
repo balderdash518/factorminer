@@ -30,7 +30,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from factorminer.memory.feedback import render_batch_feedback
+from factorminer.memory.feedback import render_batch_feedback, render_family_ledger
 from factorminer.memory.memory_store import (
     ExperienceMemory,
     ForbiddenDirection,
@@ -839,6 +839,7 @@ def retrieve_memory(
             admission_log=memory.state.admission_log,
             last_batch_feedback=memory.state.last_batch_feedback,
             feedback_history=memory.state.feedback_history,
+            family_ledger=memory.state.family_ledger,
         )
     else:
         state = memory.state
@@ -889,6 +890,11 @@ def retrieve_memory(
     )
     if feedback_text:
         prompt_text = f"{prompt_text}\n{feedback_text}\n"
+    ledger_text = render_family_ledger(
+        state.family_ledger, (library_state or {}).get("available_features")
+    )
+    if ledger_text:
+        prompt_text = f"{prompt_text}\n{ledger_text}\n"
 
     return {
         "recommended_directions": [p.to_dict() for p in relevant_success],

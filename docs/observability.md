@@ -35,7 +35,9 @@ export LANGFUSE_SECRET_KEY=sk-lf-...
 export LANGFUSE_BASE_URL=https://cloud.langfuse.com   # 或 https://us.cloud.langfuse.com，或自建地址
 ```
 
-`observability.langfuse: "auto"`（默认）在检测到这两个 key 时自动启用；`"on"` 在缺 key 时给出警告；`"off"` 关闭。Python SDK v5 需要 Langfuse 服务端 ≥ v4.59.0；自建的 Langfuse v3 需改用 SDK v4（把依赖改成 `langfuse>=4,<5`）。
+`observability.langfuse: "auto"`（默认）在检测到这两个 key 时自动启用；`"on"` 在缺 key 时给出警告；`"off"` 关闭。本仓库要求 Python SDK `>=5.0.4,<6`，锁定版本为 `5.0.4`，支持 Langfuse Cloud v4 或自建服务端 ≥ v4.59.0。平台 v4 与 Python SDK v5 是不同的版本编号。自建 v3 或较早 v4 必须先升级服务端。若同时设置 `LANGFUSE_BASE_URL` 和 `LANGFUSE_HOST`，两者必须指向同一地址；冲突时停止远端追踪并保留本地记录。
+
+根 observation 保存迭代的 input/output；创建根节点之前就建立 `propagate_attributes` 作用域，将 session、tags、metadata、trace name 和当前运行的 environment 传给所有子节点，包括计费的 generation。release 由 SDK 初始化配置，默认不公开 trace。详细迁移盘点、验证证据和待完成项目检查见 [Langfuse v4 migration](langfuse-v4-migration.md)。
 
 实盘运行建议设 `observability.environment: "production"`，mock 与调试保持 `development`，避免测试数据混进看板。
 
@@ -115,6 +117,8 @@ uv run --no-sync python scripts/sync_langfuse_prompts.py --apply
 ```
 
 在 Langfuse 中修改模板后，将目标版本标为 `production`。SDK 使用默认的 prompt 缓存策略，更新不保证即时生效。发布脚本以本地模板为准，重新执行 `--apply` 会将本地内容发布为 production，因此不要用它覆盖尚未同步回代码的云端编辑。
+
+发布脚本使用固定版本 `@langfuse/cli@1.2.4`（Node.js ≥20），由 `npx` 在显式 `--apply` 时运行。预览与挖掘不需要 CLI；迁移验证也不安装或运行 CLI。脚本检查 JSON 响应及进程退出码，并允许查询不存在的 prompt 返回 HTTP 404 后创建。
 
 `observability.prompt_management: false` 可关闭托管模板读取，保留追踪。没有凭据、云端不可用、模板变量或消息结构不兼容时继续使用本地提示词，且不关联一个未实际使用的版本。自定义 specialist/system prompt 和变化后的特征注册表不会被默认模板覆盖。离线失败后，同一轮运行不反复请求该模板。
 

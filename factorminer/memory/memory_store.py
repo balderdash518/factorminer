@@ -29,6 +29,9 @@ class MiningState:
     # per-iteration outcome history used to read trends.
     last_batch_feedback: dict = field(default_factory=dict)
     feedback_history: list[dict] = field(default_factory=list)
+    # Cumulative per-family outcomes over every batch (memory.feedback), so the
+    # generator sees what was already tried, not only the latest batch.
+    family_ledger: dict[str, dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -43,6 +46,7 @@ class MiningState:
             admission_log=d.get("admission_log", []),
             last_batch_feedback=d.get("last_batch_feedback", {}),
             feedback_history=d.get("feedback_history", []),
+            family_ledger=d.get("family_ledger", {}),
         )
 
 

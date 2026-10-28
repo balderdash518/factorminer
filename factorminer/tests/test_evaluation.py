@@ -108,6 +108,19 @@ class TestIC:
         ic_series = compute_ic(signals, returns)
         assert np.all(np.isnan(ic_series))
 
+    def test_constant_cross_section_ic_is_nan_not_zero(self, rng):
+        M, T = 20, 6
+        signals = rng.normal(size=(M, T))
+        returns = rng.normal(size=(M, T))
+        signals[:, :2] = 0.0  # e.g. a CsZScore over an all-tied warm-up column
+
+        rank = compute_rank_ic(signals, returns)
+        pearson = compute_pearson_ic(signals, returns)
+
+        assert np.all(np.isnan(rank[:2])) and np.all(np.isfinite(rank[2:]))
+        assert np.all(np.isnan(pearson[:2]))
+        assert compute_ic_mean(rank) == pytest.approx(np.mean(rank[2:]))
+
     def test_pearson_ic_and_rank_ic_are_explicitly_distinct(self):
         signals = np.tile(np.array([1.0, 2.0, 3.0, 4.0, 100.0])[:, None], (1, 4))
         returns = np.tile(np.array([1.0, 2.0, 3.0, 4.0, 5.0])[:, None], (1, 4))

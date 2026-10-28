@@ -219,11 +219,16 @@ class OperatorNode(Node):
 def _safe_div(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Division that returns 0 where the denominator is near zero.
 
+    Missing inputs stay missing: a NaN numerator or denominator yields NaN, so
+    rolling warm-up and absent assets are not turned into a tied 0 that
+    ``CsRank`` would then order by asset row.
+
     ``np.where`` evaluates the division on invalid elements before masking it.
     """
     mask = np.abs(b) > _EPS
     out = np.zeros(np.broadcast_shapes(np.shape(a), np.shape(b)), dtype=np.float64)
     np.divide(a, b, out=out, where=mask)
+    out[np.broadcast_to(np.isnan(a) | np.isnan(b), out.shape)] = np.nan
     return out
 
 

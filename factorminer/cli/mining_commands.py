@@ -183,6 +183,7 @@ def mine(
             library=library,
             run_context=run_context,
         )
+        loop.reflection_provider = _app._create_reflection_provider(cfg, mock)
         result_library = loop.run(callback=progress, resume=not bool(resume))
     except KeyboardInterrupt:
         click.echo("\nMining interrupted by user.")
@@ -328,6 +329,7 @@ def helix(
             significance_config=phase2_configs["significance_config"],
             volume=volume,
         )
+        loop.reflection_provider = _app._create_reflection_provider(cfg, mock)
         result_library = loop.run(callback=progress, resume=not bool(resume))
     except KeyboardInterrupt:
         click.echo("\nHelix mining interrupted by user.")

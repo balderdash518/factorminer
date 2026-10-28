@@ -125,12 +125,52 @@ def test_neuroii_config_loads() -> None:
     assert cfg.llm.max_tokens == 24576
     assert raw["llm"]["context_window"] == 32768
     assert cfg.llm.stream is True
-    assert cfg.memory.reflection_max_tokens == 8192
+    assert cfg.memory.reflection_max_tokens == 32768
+    assert cfg.memory.reflection_llm == {}  # reflection reuses the thinking generator
 
-    from factorminer.cli.app import _create_llm_provider
+    from factorminer.cli.app import _create_llm_provider, _create_reflection_provider
 
     cfg._raw = raw
-    assert _create_llm_provider(cfg, mock=False).inner.stream is True
+    primary = _create_llm_provider(cfg, mock=False).inner
+    assert primary.stream is True
+    assert primary.extra_body == {}
+    cfg.memory.llm_reflection = True
+    cfg.memory.reflection_llm = {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+    reflection = _create_reflection_provider(cfg, mock=False).inner
+    # Same endpoint and model as generation, thinking off for this call only.
+    assert (reflection.base_url, reflection.model) == (primary.base_url, primary.model)
+    assert reflection.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def test_reflection_provider_with_another_provider_stands_alone(monkeypatch) -> None:
+    from factorminer.cli.app import _create_reflection_provider
+    from factorminer.utils.config import load_config
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
+    cfg = load_config(overrides={
+        "llm": {"provider": "openai_compatible", "model": "Qwen/Qwen3.8-27B-FP8"},
+        "memory": {"llm_reflection": True,
+                   "reflection_llm": {"provider": "deepseek", "model": "deepseek-chat"}},
+    })
+    cfg._raw = {"llm": {"base_url": "https://example.test/v1",
+                        "extra_body": {"chat_template_kwargs": {"enable_thinking": True}}}}
+    reflection = _create_reflection_provider(cfg, mock=False)
+    assert reflection.provider_name == "deepseek/deepseek-chat"
+    assert reflection.inner.base_url == "https://api.deepseek.com"
+    assert reflection.inner.extra_body == {}
+
+
+def test_reflection_provider_defaults_to_the_generator() -> None:
+    from factorminer.cli.app import _create_reflection_provider
+    from factorminer.utils.config import load_config
+
+    override = {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+    cfg = load_config(overrides={"memory": {"llm_reflection": True}})
+    assert _create_reflection_provider(cfg, mock=False) is None  # no override
+    cfg = load_config(overrides={"memory": {"reflection_llm": override}})
+    assert _create_reflection_provider(cfg, mock=False) is None  # reflection off
+    cfg = load_config(overrides={"memory": {"llm_reflection": True, "reflection_llm": override}})
+    assert _create_reflection_provider(cfg, mock=True) is None
 
 
 def test_max_tokens_shrinks_only_when_prompt_would_overflow_context() -> None:

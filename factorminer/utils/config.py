@@ -61,8 +61,14 @@ class EvaluationConfig:
     signal_failure_policy: str = "reject"
     signal_dtype: str = "float64"
     signal_cache_mb: float | None = None
+    # WorldQuant BRAIN-style book checks (evaluation.portfolio_checks); off
+    # unless ``enabled: true``. See PortfolioThresholds for keys and defaults.
+    portfolio_checks: dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
+        from factorminer.evaluation.portfolio_checks import PortfolioThresholds
+
+        PortfolioThresholds.from_mapping(self.portfolio_checks)
         if self.num_workers < 1:
             raise ValueError("num_workers must be >= 1")
         if self.fast_screen_assets < 1:
@@ -263,6 +269,14 @@ class MemoryConfig:
     # observations / next hypotheses). Off by default: not part of the paper.
     llm_reflection: bool = False
     reflection_max_tokens: int = 1024
+    # Optional provider for the reflection call only. Keys without ``provider``
+    # (or with the same provider as ``llm``) are merged onto the ``llm`` config,
+    # e.g. ``{extra_body: {chat_template_kwargs: {enable_thinking: false}}}``;
+    # a different ``provider`` (e.g. ``deepseek``) is used on its own.
+    reflection_llm: dict[str, Any] = field(default_factory=dict)
+    # Optional evidence-guided proposal/review/replacement loop; paper baseline
+    # remains unchanged unless explicitly enabled. Validated feature-locally.
+    evidence_guided: dict[str, Any] = field(default_factory=dict)
     max_success_patterns: int = 50
     max_failure_patterns: int = 100
     max_insights: int = 30
@@ -297,6 +311,11 @@ class MemoryConfig:
             raise ValueError("memory.seed must be one of: empty, paper_defaults")
         if self.reflection_max_tokens < 1:
             raise ValueError("memory.reflection_max_tokens must be >= 1")
+        if not isinstance(self.reflection_llm, dict):
+            raise ValueError("memory.reflection_llm must be a mapping")
+        from factorminer.application.evidence_generation import EvidenceGuidedSettings
+
+        EvidenceGuidedSettings.from_mapping(self.evidence_guided)
         if self.max_success_patterns < 1:
             raise ValueError("max_success_patterns must be >= 1")
         if self.max_failure_patterns < 1:

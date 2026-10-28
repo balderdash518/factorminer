@@ -36,6 +36,30 @@ def _with_error(candidate: CandidateFactor) -> str:
     return candidate.formula
 
 
+def restrict_features(
+    candidates: list[CandidateFactor], features: list[str] | None,
+) -> list[CandidateFactor]:
+    """Invalidate candidates whose leaves are outside ``features`` (in place).
+
+    The parser accepts every registered leaf, but a dataset can provide fewer
+    (``data.features``); such formulas go to the repair path with the reason.
+    """
+    if features is None:
+        return candidates
+    available = set(features)
+    for candidate in candidates:
+        if candidate.expression_tree is None:
+            continue
+        missing = sorted(set(candidate.expression_tree.leaf_features()) - available)
+        if missing:
+            candidate.expression_tree = None
+            candidate.parse_error = (
+                f"{', '.join(missing)} not available in this dataset; "
+                f"use only {', '.join(features)}"
+            )
+    return candidates
+
+
 class FactorGenerator:
     """LLM-based factor generation agent.
 
@@ -81,6 +105,8 @@ class FactorGenerator:
         self._generation_count = 0
         # Token totals of the latest generate_batch call (all LLM calls in it).
         self.last_batch_usage: dict[str, int] = {}
+        self.last_proposals: list[CandidateFactor] = []
+        self.last_unparsed_lines: list[str] = []
 
     @staticmethod
     def _unwrap_cascade_provider(provider: LLMProvider) -> CascadeProvider | None:
@@ -246,6 +272,8 @@ class FactorGenerator:
         self._generation_count += 1
         batch_id = self._generation_count
         self.last_batch_usage = {}
+        self.last_proposals = []
+        self.last_unparsed_lines = []
 
         logger.info(
             "Generating batch #%d: size=%d, provider=%s",
@@ -276,6 +304,9 @@ class FactorGenerator:
 
         # 3. Parse output — free deterministic routing signal for cascade
         candidates, failed_lines = parse_llm_output(raw_output)
+        restrict_features(candidates, self.prompt_builder.features)
+        self.last_proposals.extend(candidates)
+        self.last_unparsed_lines.extend(failed_lines)
 
         valid = [c for c in candidates if c.is_valid]
         invalid = [c for c in candidates if not c.is_valid]
@@ -373,6 +404,9 @@ class FactorGenerator:
                 break
 
             candidates, still_failed = parse_llm_output(raw)
+            restrict_features(candidates, self.prompt_builder.features)
+            self.last_proposals.extend(candidates)
+            self.last_unparsed_lines.extend(still_failed)
             new_valid = [c for c in candidates if c.is_valid]
             recovered.extend(new_valid)
 

@@ -81,6 +81,7 @@ OUTCOME_COMPUTE_ERROR = "compute_error"
 OUTCOME_INVALID_SIGNAL = "invalid_signal"
 OUTCOME_LOW_IC = "low_ic"
 OUTCOME_LOW_ICIR = "low_icir"
+OUTCOME_FAILED_CHECKS = "failed_checks"  # evaluation.portfolio_checks
 OUTCOME_REDUNDANT = "redundant"
 OUTCOME_BATCH_DUPLICATE = "batch_duplicate"
 OUTCOME_RESEARCH_REJECTED = "research_rejected"
@@ -97,6 +98,7 @@ OUTCOMES = (
     OUTCOME_INVALID_SIGNAL,
     OUTCOME_LOW_IC,
     OUTCOME_LOW_ICIR,
+    OUTCOME_FAILED_CHECKS,
     OUTCOME_REDUNDANT,
     OUTCOME_BATCH_DUPLICATE,
     OUTCOME_RESEARCH_REJECTED,
@@ -138,12 +140,17 @@ class EvaluationResult:
     effective_rank_gain: float = 0.0
     log_det_gain: float = 0.0
     score_vector: dict[str, Any] | None = None
+    portfolio: dict[str, float] | None = None  # evaluation.portfolio_checks metrics
     # Parent-formula lineage for EditAwareMemoryPolicy + MRM developmental history.
     parent_formula: str = ""
     parent_ic_paper_mean: float | None = None
     edit_type: str = ""
     edit_motif: str = ""
     secondary_parent_formula: str = ""
+    # Deliberate experiment ancestry is separate from inferred similarity.
+    attempt_id: str = ""
+    declared_parent_id: str = ""
+    nearest_prior_ids: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

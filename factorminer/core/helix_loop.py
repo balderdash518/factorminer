@@ -267,6 +267,13 @@ class HelixLoop(RalphLoop):
             payload.prompt_context, payload.library_state, payload.batch_size
         )
         payload.stage_metrics["candidates_before_canon"] = len(proposed)
+        if self.evidence_guidance is not None:
+            # The shared evidence gate owns deduplication in this mode. The
+            # legacy SymPy/vector gate cannot prove executor equivalence and
+            # would hide rejected proposals from the archive before review.
+            payload.stage_metrics["canonical_duplicates_removed"] = 0
+            payload.stage_metrics["semantic_duplicates_removed"] = 0
+            return proposed
         deduped, n_canon_dupes, n_semantic_dupes = self._canonicalize_and_dedup(proposed)
         payload.stage_metrics["canonical_duplicates_removed"] = n_canon_dupes
         payload.stage_metrics["semantic_duplicates_removed"] = n_semantic_dupes
@@ -686,10 +693,10 @@ class HelixLoop(RalphLoop):
 
     def _phase2_features(self) -> list[str]:
         """List the enabled Helix Phase 2 features."""
-        features: list[str] = []
+        features: list[str] = super()._phase2_features()
         if self._debate_generator is not None:
             features.append("debate")
-        if self._canonicalizer is not None:
+        if self._canonicalizer is not None and self.evidence_guidance is None:
             features.append("canonicalization")
         if self._kg is not None:
             features.append("knowledge_graph")

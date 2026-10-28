@@ -180,6 +180,24 @@ def get_features() -> list[str]:
     return list(FEATURES)
 
 
+def configured_feature_names(features: list[str] | tuple[str, ...] | None) -> list[str]:
+    """DSL leaves for ``data.features`` in the order the runtime tensor stores them.
+
+    Mirrors ``evaluation.runtime._resolve_feature_columns``: one leaf per panel
+    column, duplicates dropped. An empty list means every default column.
+    """
+    if not features:
+        return list(DEFAULT_FEATURES)
+    names: list[str] = []
+    columns: set[str] = set()
+    for feature in features:
+        column = feature_to_column(str(feature))
+        if column not in columns:
+            columns.add(column)
+            names.append(column_to_feature(column))
+    return names
+
+
 def get_feature_set() -> frozenset[str]:
     """Return the currently registered feature set (live view)."""
     return frozenset(FEATURES)

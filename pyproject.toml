@@ -92,7 +92,7 @@ all = [
     "mypy",
 ]
 observability = [
-    "langfuse>=5,<6",
+    "langfuse>=5.0.4,<6",
 ]
 
 [dependency-groups]

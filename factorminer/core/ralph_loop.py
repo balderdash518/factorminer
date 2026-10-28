@@ -33,6 +33,10 @@ from factorminer.agent.factor_generator import FactorGenerator
 from factorminer.agent.llm_interface import LLMProvider, MockProvider
 from factorminer.agent.output_parser import candidate_pairs
 from factorminer.agent.prompt_builder import PromptBuilder
+from factorminer.application.evidence_generation import (
+    EvidenceGuidedGeneration,
+    EvidenceGuidedSettings,
+)
 from factorminer.application.mining_budget import BudgetTracker, EvaluationResult
 from factorminer.application.mining_reporting import MiningReporter
 from factorminer.application.research_actions import build_research_action_service
@@ -66,6 +70,7 @@ from factorminer.core.library_io import load_library, save_library
 from factorminer.core.loop_services import LoopExecutionService
 from factorminer.core.provenance import infer_parent_lineage, stable_digest
 from factorminer.core.session import MiningSession
+from factorminer.core.types import configured_feature_names, get_features
 from factorminer.evaluation.dependence_index import indexed_dependence_metric
 from factorminer.memory.defaults import create_default_memory
 from factorminer.memory.memory_store import ExperienceMemory
@@ -73,6 +78,28 @@ from factorminer.utils.logging import MiningSessionLogger
 from factorminer.utils.tracing import MiningTracer, activate, tracer_from_config
 
 logger = logging.getLogger(__name__)
+
+
+def _tensor_feature_names(config: Any, data_tensor: Any) -> list[str]:
+    """Leaf name of each ``data_tensor`` slice, shared by the prompt and evaluation.
+
+    Runtime tensors are built from ``data.features`` in that order. A tensor
+    whose width does not match (mock or hand-built panels) keeps the registry
+    order used before ``data.features`` was honoured.
+    """
+    if isinstance(data_tensor, dict):
+        return list(data_tensor)
+    width = data_tensor.shape[2] if getattr(data_tensor, "ndim", 0) == 3 else None
+    configured = configured_feature_names(
+        getattr(getattr(config, "data", None), "features", None)
+    )
+    if width is None or len(configured) == width:
+        return configured
+    logger.warning(
+        "data.features lists %d features but the data tensor has %d; "
+        "using the feature registry order instead", len(configured), width,
+    )
+    return get_features()[:width]
 
 
 # ---------------------------------------------------------------------------
@@ -182,12 +209,15 @@ class RalphLoop:
             self.settings.output_dir,
             campaign_id=self.trial_campaign_id,
         )
+        self.feature_names = _tensor_feature_names(config, data_tensor)
         self.generator = FactorGenerator(
             llm_provider=llm_provider or MockProvider(),
-            prompt_builder=PromptBuilder(),
+            prompt_builder=PromptBuilder(features=self.feature_names),
             temperature=getattr(getattr(config, "llm", None), "temperature", 0.8),
             max_tokens=getattr(getattr(config, "llm", None), "max_tokens", 4096),
         )
+        # memory.reflection_llm provider; None reuses the generator's provider.
+        self.reflection_provider: LLMProvider | None = None
         self.evaluation_kernel = EvaluationKernel(
             protocol=self.protocol,
             geometry=self.geometry,
@@ -210,10 +240,27 @@ class RalphLoop:
             redundancy_metric=self.settings.redundancy_metric,
             evaluation_kernel=self.evaluation_kernel,
             default_target=self.dataset_contract.default_target,
+            feature_names=self.feature_names,
+            portfolio_checks=self.settings.portfolio_checks,
         )
         self.pipeline.signal_failure_policy = self.settings.signal_failure_policy
         self.reporter = MiningReporter(self.settings.output_dir)
         self.budget = BudgetTracker()
+        guidance_settings = EvidenceGuidedSettings.from_mapping(
+            getattr(getattr(config, "memory", None), "evidence_guided", None)
+        )
+        self.evidence_guidance = (
+            EvidenceGuidedGeneration(
+                guidance_settings, self.settings.output_dir, stable_digest({
+                    "dataset_id": self.trial_dataset_id,
+                    "protocol": self.protocol.runtime_contract(),
+                    "evaluation": self._serialize_config().get("evaluation", {}),
+                    "research": self._serialize_config().get("research", {}),
+                    "phase2": self._serialize_config().get("phase2", {}),
+                    "formula_identity": "executor-ordered-ast-v1",
+                }),
+            ) if guidance_settings.enabled else None
+        )
         self.research_actions = build_research_action_service(self)
         self.signal_failure_policy = self.settings.signal_failure_policy
         self.runtime_profile = RuntimeProfile()
@@ -480,11 +527,15 @@ class RalphLoop:
         if not enabled or not feedback or feedback.get("iteration") != self.iteration:
             return
         from factorminer.agent.reflection import reflect_on_batch
-        from factorminer.memory.feedback import render_batch_feedback
+        from factorminer.memory.feedback import render_batch_feedback, render_family_ledger
 
-        reflection = reflect_on_batch(
-            self.generator.llm_provider,
+        evidence = "\n\n".join(part for part in (
             render_batch_feedback(feedback, self.memory.state.feedback_history[:-1]),
+            render_family_ledger(self.memory.state.family_ledger, self.feature_names),
+        ) if part)
+        reflection = reflect_on_batch(
+            self.reflection_provider or self.generator.llm_provider,
+            evidence,
             library_formulas=[factor.formula for factor in self.library.list_factors()],
             max_tokens=int(getattr(memory_cfg, "reflection_max_tokens", 1024)),
         )
@@ -550,6 +601,27 @@ class RalphLoop:
                 continue
             if result.parent_formula:
                 continue
+            if self.evidence_guidance is not None:
+                # In enhanced mode, a retrieved neighbor must not become an
+                # invented causal edit edge in the existing edit-memory policy.
+                from factorminer.architecture.memory_policy import extract_edit_motif
+                from factorminer.memory.attempt_archive import formula_descriptor
+
+                descriptor = formula_descriptor(result.formula)
+                attempt_id = self.evidence_guidance.pending.get(descriptor["key"]) if descriptor else None
+                attempt = self.evidence_guidance.archive.attempts.get(attempt_id, {})
+                parent_id = attempt.get("declared_parent_id", "")
+                parent = self.evidence_guidance.archive.attempts.get(parent_id, {})
+                result.attempt_id = attempt_id or ""
+                result.nearest_prior_ids = list(attempt.get("nearest_prior_ids", []))
+                result.declared_parent_id = parent_id if parent else ""
+                result.edit_type = "unknown"
+                if parent:
+                    result.parent_formula = parent["formula"]
+                    result.parent_ic_paper_mean = parent.get("metrics", {}).get("ic_paper_mean")
+                    result.edit_type = "mutation"
+                    result.edit_motif = extract_edit_motif(parent["formula"], result.formula)
+                continue
             lineage = infer_parent_lineage(
                 result.formula,
                 library_state,
@@ -576,6 +648,9 @@ class RalphLoop:
             "edit_type": result.edit_type or "",
             "edit_motif": result.edit_motif or "",
             "secondary_parent_formula": result.secondary_parent_formula or "",
+            "attempt_id": result.attempt_id,
+            "declared_parent_id": result.declared_parent_id,
+            "nearest_prior_ids": list(result.nearest_prior_ids),
             # Canonical quality aliases used by EditAwareMemoryPolicy.
             "ic_paper_mean": result.ic_paper_mean,
             "paper_ic": result.ic_paper_mean,
@@ -616,6 +691,7 @@ class RalphLoop:
                 "rejection_reason": r.rejection_reason,
                 "replacement_note": r.replacement_note,
                 "duplicate_of": r.duplicate_of,
+                "portfolio": r.portfolio,
             }
             entry.update(self._lineage_fields(r))
             trajectory.append(entry)
@@ -766,6 +842,8 @@ class RalphLoop:
                 "compute_seconds": self.budget.compute_seconds,
             },
         }
+        if self.evidence_guidance is not None:
+            loop_state["evidence_guidance"] = self.evidence_guidance.save_checkpoint(checkpoint_dir)
         with open(checkpoint_dir / "loop_state.json", "w") as f:
             json.dump(loop_state, f, indent=2)
 
@@ -797,6 +875,11 @@ class RalphLoop:
                 raise ValueError("Checkpoint dataset changed; use a separate output directory")
             if loop_state.get("protocol", self.protocol.runtime_contract()) != self.protocol.runtime_contract():
                 raise ValueError("Checkpoint protocol changed; use a separate output directory")
+            guidance_state = loop_state.get("evidence_guidance")
+            if guidance_state:
+                if self.evidence_guidance is None:
+                    raise ValueError("Checkpoint requires memory.evidence_guided.enabled=true")
+                self.evidence_guidance.restore_checkpoint(checkpoint_dir, guidance_state)
             self.iteration = loop_state.get("iteration", 0)
             self.generator._generation_count = loop_state.get("generator_batches", 0)
             if isinstance(self.generator.llm_provider, MockProvider):
@@ -985,7 +1068,7 @@ class RalphLoop:
 
     def _phase2_features(self) -> list[str]:
         """Phase 2 feature flags used by the current loop."""
-        return []
+        return ["evidence_guided_generation"] if self.evidence_guidance is not None else []
 
     def _refresh_run_manifest(
         self,

@@ -47,6 +47,11 @@ class RetrieveStage(LoopStage):
         settings = getattr(loop, "settings", None)
         if settings is not None:
             payload.library_state.setdefault("target_size", settings.target_library_size)
+        if getattr(loop, "feature_names", None) is not None:
+            payload.library_state["available_features"] = list(loop.feature_names)
+        checks = getattr(getattr(loop, "pipeline", None), "portfolio_checks", None)
+        if checks is not None:
+            payload.library_state["portfolio_checks"] = checks.describe()
         payload.memory_signal = self._retrieve_fn(loop, payload)
 
 

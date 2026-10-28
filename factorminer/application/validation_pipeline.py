@@ -11,6 +11,7 @@ import numpy as np
 from factorminer.application.mining_budget import (
     OUTCOME_ADMITTED,
     OUTCOME_COMPUTE_ERROR,
+    OUTCOME_FAILED_CHECKS,
     OUTCOME_INVALID_SIGNAL,
     OUTCOME_LOW_IC,
     OUTCOME_LOW_ICIR,
@@ -25,6 +26,11 @@ from factorminer.core.factor_library import FactorLibrary
 from factorminer.core.types import get_features
 from factorminer.evaluation.dependence_index import indexed_dependence_metric
 from factorminer.evaluation.metrics import compute_factor_stats
+from factorminer.evaluation.portfolio_checks import (
+    PortfolioThresholds,
+    liquid_subset,
+    run_portfolio_checks,
+)
 from factorminer.evaluation.runtime import SignalComputationError, compute_tree_signals
 
 logger = logging.getLogger(__name__)
@@ -61,8 +67,14 @@ class ValidationPipeline:
         redundancy_metric: str = "spearman",
         evaluation_kernel: EvaluationKernel | None = None,
         default_target: str = "paper",
+        feature_names: list[str] | None = None,
+        portfolio_checks: PortfolioThresholds | None = None,
     ) -> None:
         self.data_tensor = data_tensor  # (M, T, F)
+        # Leaf name of each tensor slice; None keeps the registry order.
+        self.feature_names = list(feature_names) if feature_names is not None else None
+        self.portfolio_checks = portfolio_checks
+        self._liquid_mask: np.ndarray | None = None
         self.returns = returns  # (M, T)
         self.default_target = default_target
         self.target_panels = target_panels or {default_target: returns}
@@ -267,6 +279,19 @@ class ValidationPipeline:
             result.outcome = OUTCOME_LOW_ICIR
             result.stage_passed = 0
             return result
+        if self.portfolio_checks is not None:
+            result.portfolio, failures = run_portfolio_checks(
+                signals,
+                self.target_panels[self.default_target],
+                self.portfolio_checks,
+                direction=1.0 if result.ic_mean >= 0 else -1.0,
+                liquid_mask=self._liquidity_mask(),
+            )
+            if failures:
+                result.rejection_reason = "; ".join(failures)
+                result.outcome = OUTCOME_FAILED_CHECKS
+                result.stage_passed = 0
+                return result
         result.stage_passed = 1
 
         if self._research_enabled():
@@ -319,6 +344,18 @@ class ValidationPipeline:
         result.rejection_reason = reason
         result.outcome = OUTCOME_REDUNDANT
         return result
+
+    def _liquidity_mask(self) -> np.ndarray | None:
+        """Most liquid assets per period by trailing close * volume (cached)."""
+        if self._liquid_mask is None and self.portfolio_checks is not None:
+            data = self._build_data_dict()
+            if "$close" in data and "$volume" in data:
+                self._liquid_mask = liquid_subset(
+                    np.asarray(data["$close"]) * np.asarray(data["$volume"]),
+                    self.portfolio_checks.sub_universe_fraction,
+                    self.portfolio_checks.liquidity_window,
+                )
+        return self._liquid_mask
 
     def _annotate_library_conflicts(self, result: EvaluationResult, signals: np.ndarray) -> None:
         """Record which library factors the candidate collides with (trajectory tau)."""
@@ -437,7 +474,7 @@ class ValidationPipeline:
         Handles two formats:
           - dict: already maps ``"$close"`` etc. to ``(M, T)`` arrays.
           - np.ndarray of shape ``(M, T, F)``: sliced along the last axis
-            using the active feature registry ordering (defaults + extras).
+            using ``feature_names``, else the registry order (defaults + extras).
         """
         if isinstance(self.data_tensor, dict):
             return self.data_tensor
@@ -445,7 +482,7 @@ class ValidationPipeline:
         # (M, T, F) numpy array — map each feature slice
         data_dict: dict[str, np.ndarray] = {}
         n_features = self.data_tensor.shape[2] if self.data_tensor.ndim == 3 else 0
-        for i, feat_name in enumerate(get_features()):
+        for i, feat_name in enumerate(self.feature_names or get_features()):
             if i < n_features:
                 data_dict[feat_name] = self.data_tensor[:, :, i]
         return data_dict

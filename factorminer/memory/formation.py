@@ -19,6 +19,7 @@ from factorminer.memory.feedback import (
     is_implementation_failure,
     is_redundancy_failure,
     summarize_trajectory,
+    update_family_ledger,
 )
 from factorminer.memory.memory_store import (
     ExperienceMemory,
@@ -419,6 +420,9 @@ def form_memory(
         feedback_history=(
             memory.state.feedback_history + [history_row(feedback)]
         )[-FEEDBACK_HISTORY_LIMIT:],
+        family_ledger=update_family_ledger(
+            memory.state.family_ledger, trajectory, batch_number
+        ),
     )
 
     return ExperienceMemory(

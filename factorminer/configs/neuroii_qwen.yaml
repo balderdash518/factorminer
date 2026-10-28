@@ -37,5 +37,18 @@ llm:
   #     enable_thinking: false
 
 memory:
-  # Reflection also uses a thinking model; 1024 tokens can end before JSON starts.
-  reflection_max_tokens: 8192
+  # Reflection keeps thinking on: on the same evidence it cited concrete formulas
+  # and wrote runnable hypotheses (~10k tokens, ~200 s), where thinking off gave
+  # generic advice (~300 tokens, ~8 s). 32768 is not a real cap: each call is
+  # lowered to whatever the context leaves after the prompt (llm.context_window),
+  # so the old 8192 limit can no longer cut the JSON off.
+  reflection_max_tokens: 32768
+  # Faster, less specific reviews: turn thinking off for this call only.
+  # reflection_llm:
+  #   extra_body:
+  #     chat_template_kwargs:
+  #       enable_thinking: false
+  # Or review with a different model (reads DEEPSEEK_API_KEY from .env):
+  # reflection_llm:
+  #   provider: deepseek
+  #   model: deepseek-chat

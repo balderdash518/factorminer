@@ -251,6 +251,15 @@ class LoopExecutionService:
             stats = self.build_stats(payload, elapsed)
             self.log_telemetry(self.build_telemetry(payload, stats, elapsed))
             return stats
+        guidance = getattr(self.loop, "evidence_guidance", None)
+        if guidance is not None:
+            memory_state = self.loop.memory.state
+            payload.memory_signal = guidance.prepare(
+                payload.memory_signal, payload.library_state, iteration=payload.iteration,
+                last_feedback=dict(memory_state.last_batch_feedback),
+                family_ledger=dict(memory_state.family_ledger),
+                research_action=payload.research_action,
+            )
         if actions is not None and action_kind == "refine":
             with get_tracer().observe(
                 "refine-candidates", as_type="tool", input=dict(payload.research_action)
@@ -260,8 +269,32 @@ class LoopExecutionService:
                     "candidates": [{"name": n, "formula": f} for n, f in payload.candidates],
                 })
         else:
-            self.run_stage_chain(payload, ("generate",))
+            target_size = payload.batch_size
+            if guidance is not None:
+                payload.batch_size += guidance.settings.reserve_candidates
+            try:
+                self.run_stage_chain(payload, ("generate",))
+            finally:
+                payload.batch_size = target_size
             self._record_llm_usage()
+
+        if guidance is not None:
+            with get_tracer().observe(
+                "check-candidate-history", as_type="chain",
+                input={"candidates": [{"name": n, "formula": f} for n, f in payload.candidates]},
+            ) as observation:
+                payload.candidates, generation_stats = guidance.filter_batch(
+                    payload.candidates, generator=self.loop.generator, budget=self.loop.budget,
+                    memory_signal=payload.prompt_context or payload.memory_signal,
+                    library_state=payload.library_state, iteration=payload.iteration,
+                    target_size=payload.batch_size, allow_replacement=action_kind != "refine",
+                    source="refinement" if action_kind == "refine" else "generation",
+                )
+                payload.stage_metrics.update(generation_stats)
+                observation.update(output={
+                    "statistics": generation_stats,
+                    "approved": [guidance.archive.attempts[v] for v in guidance.pending.values()],
+                })
 
         if not payload.candidates:
             logger.warning(
@@ -271,7 +304,13 @@ class LoopExecutionService:
                 self.describe_empty_generation(payload),
             )
             if actions is None:
-                return self.empty_stats()
+                stats = self.empty_stats()
+                stats.update(payload.stage_metrics)
+                if guidance is not None:
+                    elapsed = time.time() - started_at
+                    self.loop.budget.record_compute(elapsed)
+                    self.log_telemetry(self.build_telemetry(payload, stats, elapsed))
+                return stats
             elapsed = time.time() - started_at
             self.loop.budget.record_compute(elapsed)
             actions.finish(payload, elapsed)
@@ -282,6 +321,8 @@ class LoopExecutionService:
         if actions is not None:
             actions.record_evaluation_dispatch(payload)
         self.run_stage_chain(payload, ("evaluate", "library_update"))
+        if guidance is not None:
+            guidance.record_results(payload.results, iteration=payload.iteration)
         summary = dict(phase2_summary or {})
         if "phase2_rejections" in payload.stage_metrics:
             summary["phase2_rejections"] = payload.stage_metrics["phase2_rejections"]
@@ -298,6 +339,8 @@ class LoopExecutionService:
         )
 
         self.run_stage_chain(payload, ("distill", *trailing_stages))
+        if guidance is not None and self.loop.memory.state.last_batch_feedback.get("iteration") == payload.iteration:
+            self.loop.memory.state.last_batch_feedback["generation_feedback"] = dict(guidance.last_feedback)
         self.loop.research_knowledge.record_results(
             payload.results,
             payload.memory_signal,

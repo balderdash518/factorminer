@@ -38,6 +38,47 @@ def _create_llm_provider(cfg, mock: bool):
         # Caching/cascade toggles are no-ops under mock; accept signature parity.
         return MockProvider(prompt_cache=bool(getattr(cfg.llm, "prompt_cache", True)))
 
+    llm_config = _llm_provider_config(cfg)
+    llm_cfg = cfg.llm
+    click.echo(
+        f"Using LLM provider: {llm_cfg.provider}/{llm_cfg.model}"
+        f" (prompt_cache={llm_config['prompt_cache']}"
+        f", cascade={'cascade' in llm_config})"
+    )
+    try:
+        return create_provider(llm_config)
+    except MissingAPIKeyError as exc:
+        click.echo(f"LLM configuration error: {exc}")
+        raise click.Abort() from exc
+
+
+def _create_reflection_provider(cfg, mock: bool):
+    """Provider for ``memory.llm_reflection``; ``None`` reuses the generator's."""
+    from factorminer.agent.llm_interface import MissingAPIKeyError, create_provider
+
+    memory_cfg = getattr(cfg, "memory", None)
+    override = dict(getattr(memory_cfg, "reflection_llm", None) or {})
+    if mock or not getattr(memory_cfg, "llm_reflection", False) or not override:
+        return None
+    base = _llm_provider_config(cfg)
+    base.pop("cascade", None)
+    if override.get("provider", base["provider"]) == base["provider"]:
+        reflection_config = _deep_merge_dict(base, override)
+    else:
+        reflection_config = override
+    click.echo(
+        f"Using reflection provider: {reflection_config['provider']}/"
+        f"{reflection_config.get('model', '(default model)')}"
+    )
+    try:
+        return create_provider(reflection_config)
+    except MissingAPIKeyError as exc:
+        click.echo(f"Reflection LLM configuration error: {exc}")
+        raise click.Abort() from exc
+
+
+def _llm_provider_config(cfg) -> dict:
+    """The ``create_provider`` config dict for ``cfg.llm`` (local YAML only)."""
     llm_cfg = cfg.llm
     llm_config: dict = {
         "provider": llm_cfg.provider,
@@ -103,16 +144,7 @@ def _create_llm_provider(cfg, mock: bool):
             ),
         }
 
-    click.echo(
-        f"Using LLM provider: {llm_cfg.provider}/{llm_cfg.model}"
-        f" (prompt_cache={llm_config['prompt_cache']}"
-        f", cascade={cascade_enabled})"
-    )
-    try:
-        return create_provider(llm_config)
-    except MissingAPIKeyError as exc:
-        click.echo(f"LLM configuration error: {exc}")
-        raise click.Abort() from exc
+    return llm_config
 
 
 def _save_result_library(library, output_dir: Path) -> Path:

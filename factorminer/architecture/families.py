@@ -80,6 +80,11 @@ _MECHANISM_FAMILY_MAP: dict[str, str] = {
     "Other": "Other/Unclassified",
 }
 
+# Every category `infer_family` can return except its `Other` fallback.
+FINE_FAMILIES: tuple[str, ...] = tuple(f for f in _MECHANISM_FAMILY_MAP if f != "Other")
+# Families `infer_family` assigns only to formulas that use this leaf.
+FAMILY_REQUIRED_FEATURE: dict[str, str] = {"VWAP": "$vwap", "Amount": "$amt"}
+
 MECHANISM_FAMILIES: tuple[str, ...] = (
     "Trend/Momentum",
     "Reversal/Mean-Reversion",

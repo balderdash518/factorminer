@@ -45,6 +45,7 @@ def render_template(template: str, variables: dict[str, str]) -> str:
 
 def prompt_definitions() -> dict[str, dict[str, Any]]:
     """Inventory and publication payloads; no network access or credentials."""
+    from factorminer.agent.evidence_reviewer import REVIEW_SYSTEM_PROMPT
     from factorminer.agent.reflection import REFLECTION_SYSTEM_PROMPT
 
     generation_system = PromptBuilder().system_prompt
@@ -53,6 +54,7 @@ def prompt_definitions() -> dict[str, dict[str, Any]]:
         ("propose-factors", generation_system, "{{batch_context}}", "agent/prompt_builder.py"),
         ("repair-formulas", generation_system, REPAIR_USER_TEMPLATE, "agent/factor_generator.py"),
         ("reflect-on-batch", REFLECTION_SYSTEM_PROMPT, REFLECTION_USER_TEMPLATE, "agent/reflection.py"),
+        ("review-similar-attempts", REVIEW_SYSTEM_PROMPT, "{{review_context}}", "agent/evidence_reviewer.py"),
     ):
         definitions[observation] = {
             "name": f"factorminer/{observation}",

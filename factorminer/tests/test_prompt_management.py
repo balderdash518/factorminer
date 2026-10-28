@@ -55,6 +55,7 @@ class _CapturingProvider(MockProvider):
     ("propose-factors", {"batch_context": "Generate exactly 1 candidate. {{literal}}"}),
     ("repair-formulas", {"broken_formulas": "  1. Negate($close)"}),
     ("reflect-on-batch", {"evidence": "low_ic: 2", "library_formulas": "  (empty)"}),
+    ("review-similar-attempts", {"review_context": "{\"candidates\": []}"}),
 ])
 def test_managed_messages_match_local_templates(observation, variables, tmp_path, monkeypatch):
     definition = prompt_definitions()[observation]
